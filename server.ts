@@ -1010,39 +1010,61 @@ async function resolveBall(match: MatchState) {
 
 // Single Player AI OPPONENT Logic
 // A witty endpoint to retrieve AI simulated throw
+
+// Predict the human's next throw from move frequency, Markov transition from
+// the last move, and repeat tendency. Returns null when there is no history.
+function predictPlayerMove(history: Array<{ playerMove?: number }>): number | null {
+  const moves = (history || []).map((h) => h.playerMove).filter((m): m is number => !!m);
+  if (moves.length === 0) return null;
+  const last = moves[moves.length - 1];
+  const scores: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+  // Overall frequency of each throw.
+  moves.forEach((m) => (scores[m] += 1));
+  // Markov: what the player tends to throw right after the current last move.
+  for (let i = 1; i < moves.length; i++) {
+    if (moves[i - 1] === last) scores[moves[i]] += 3;
+  }
+  // Humans tend to repeat the move that just worked.
+  scores[last] += 1.5;
+  let best = last;
+  let bestScore = -1;
+  for (let m = 1; m <= 6; m++) {
+    if (scores[m] > bestScore) {
+      bestScore = scores[m];
+      best = m;
+    }
+  }
+  return best;
+}
+
 app.post("/api/ai-move", (req, res) => {
-  const { history, playerStreak, difficulty } = req.body;
+  const { history, difficulty, aiBatting } = req.body;
 
   // Hand Cricket standard AI logic
   // "EASY" -> Pure Random throw between 1-6
-  // "MEDIUM" -> Basic human pattern tracking (tendency to repeat moves or avoid previous throw)
-  // "HARD" -> Predict human based on historical runs throws or throw average
+  // "MEDIUM" -> Basic human pattern tracking (tendency to repeat / avoid previous throw)
+  // "HARD" -> Predict human's next throw (frequency + Markov) and counter it
   let aiMove = Math.floor(Math.random() * 6) + 1;
 
   if (history && history.length > 0) {
     const lastPlayerMove = history[history.length - 1].playerMove;
+
     if (difficulty === "HARD") {
-      // Hard AI attempts to counter human repeats
-      // Humans repeat same moves 30% of the time, or throw sequences (e.g. 1 after 6, 2 after 1)
-      const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-      history.forEach((h: any) => {
-        if (h.playerMove) counts[h.playerMove]++;
-      });
-      // Find batsman's favorite throw
-      let favorite = 4;
-      let maxCount = 0;
-      for (const move in counts) {
-        if (counts[move] > maxCount) {
-          maxCount = counts[move];
-          favorite = parseInt(move, 10);
+      const predicted = predictPlayerMove(history);
+      if (predicted) {
+        if (aiBatting) {
+          // AI is batting: avoid the number the bowler is predicted to throw,
+          // and otherwise bat aggressively for the highest safe run.
+          const safe = [6, 5, 4, 3, 2, 1].filter((v) => v !== predicted);
+          aiMove = Math.random() < 0.7 ? safe[0] : safe[Math.floor(Math.random() * safe.length)];
+        } else {
+          // AI is bowling: match the predicted batting number to take the wicket.
+          // 65% commit to the read, else mix in randomness so it stays beatable.
+          aiMove = Math.random() < 0.65 ? predicted : Math.floor(Math.random() * 6) + 1;
         }
       }
-      // 45% chance of picking favorite, 55% random
-      if (Math.random() < 0.45) {
-        aiMove = favorite;
-      }
     } else if (difficulty === "MEDIUM") {
-      // Avoid previous throw
+      // Lightly avoid the player's previous throw.
       if (Math.random() < 0.5) {
         const potential = [1, 2, 3, 4, 5, 6].filter((v) => v !== lastPlayerMove);
         aiMove = potential[Math.floor(Math.random() * potential.length)];

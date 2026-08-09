@@ -15,6 +15,15 @@ import { apiUrl, wsUrl } from "./services/api";
 import { googleConfigured, initAuth, googleSignIn, googleSignOut } from "./services/auth";
 import { App as CapacitorApp } from "@capacitor/app";
 import { haptic } from "./services/haptics";
+import {
+  AVATAR_ITEMS,
+  FRAME_ITEMS,
+  DEFAULT_OWNED,
+  avatarEmoji,
+  frameRing,
+  itemPrice,
+} from "./services/cosmetics";
+import { ACHIEVEMENTS, evaluateAchievements } from "./services/achievements";
 import confetti from "canvas-confetti";
 import {
   Trophy,
@@ -41,6 +50,11 @@ import {
   User,
   LogIn,
   Edit3,
+  Coins,
+  Award,
+  Lock,
+  ShoppingBag,
+  Check,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -81,6 +95,8 @@ class SoundEffects {
 
   public static playBallRun(runs: number) {
     haptic[runs === 6 ? "medium" : "light"]();
+    // Crowd reacts to boundaries.
+    if (runs >= 4) this.playCrowdCheer(runs === 6 ? 1.1 : 0.7);
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -103,6 +119,8 @@ class SoundEffects {
 
   public static playWicketOut() {
     haptic.heavy();
+    // Sharp double-buzz so a wicket feels distinct from a run.
+    setTimeout(() => haptic.medium(), 120);
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -122,8 +140,44 @@ class SoundEffects {
     } catch (e) {}
   }
 
+  // Layered white-noise swell that mimics a stadium crowd roar.
+  public static playCrowdCheer(intensity: number = 1) {
+    if (this.isMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const duration = 0.9 + intensity * 0.3;
+      const bufferSize = Math.floor(ctx.sampleRate * duration);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        // Noise that swells in then fades out for a natural cheer envelope.
+        const t = i / bufferSize;
+        const env = Math.sin(Math.PI * t);
+        data[i] = (Math.random() * 2 - 1) * env;
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const bandpass = ctx.createBiquadFilter();
+      bandpass.type = "bandpass";
+      bandpass.frequency.value = 900 + intensity * 300;
+      bandpass.Q.value = 0.7;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.06 + intensity * 0.05, ctx.currentTime + 0.15);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+      noise.connect(bandpass);
+      bandpass.connect(gain);
+      gain.connect(ctx.destination);
+      noise.start();
+      noise.stop(ctx.currentTime + duration);
+    } catch (e) {}
+  }
+
   public static playMatchWon() {
     haptic.medium();
+    this.playCrowdCheer(1.4);
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -256,6 +310,138 @@ export default function App() {
   useEffect(() => {
     safeLocalStorage.setItem("hc_streak", dailyStreak.toString());
   }, [dailyStreak]);
+
+  // Cosmetics: owned + equipped avatar emoji and frame ring.
+  const [ownedCosmetics, setOwnedCosmetics] = useState<string[]>(() => {
+    const val = safeLocalStorage.getItem("hc_owned");
+    if (val) {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) return Array.from(new Set([...DEFAULT_OWNED, ...parsed]));
+      } catch (e) {}
+    }
+    return [...DEFAULT_OWNED];
+  });
+  const [equippedAvatar, setEquippedAvatar] = useState<string>(() => safeLocalStorage.getItem("hc_avatar") || "bat");
+  const [equippedFrame, setEquippedFrame] = useState<string>(() => safeLocalStorage.getItem("hc_frame") || "none");
+
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_owned", JSON.stringify(ownedCosmetics));
+  }, [ownedCosmetics]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_avatar", equippedAvatar);
+  }, [equippedAvatar]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_frame", equippedFrame);
+  }, [equippedFrame]);
+
+  const currentEmoji = avatarEmoji(equippedAvatar);
+  const currentFrame = frameRing(equippedFrame);
+
+  const handleBuyCosmetic = (id: string) => {
+    if (ownedCosmetics.includes(id)) return;
+    const price = itemPrice(id);
+    if (coins < price) {
+      triggerToast(`Need ${price} coins for this item. Play more or claim your daily reward!`, "error");
+      return;
+    }
+    setCoins((prev) => prev - price);
+    setOwnedCosmetics((prev) => [...prev, id]);
+    SoundEffects.playMatchWon();
+    haptic.success();
+    triggerToast("Unlocked! Tap again to equip it.", "success");
+  };
+
+  const handleEquipAvatar = (id: string) => {
+    if (!ownedCosmetics.includes(id)) return handleBuyCosmetic(id);
+    SoundEffects.playClick();
+    setEquippedAvatar(id);
+  };
+
+  const handleEquipFrame = (id: string) => {
+    if (!ownedCosmetics.includes(id)) return handleBuyCosmetic(id);
+    SoundEffects.playClick();
+    setEquippedFrame(id);
+  };
+
+  // Achievements: persisted set of unlocked ids + event flags.
+  const [unlockedAchievements, setUnlockedAchievements] = useState<string[]>(() => {
+    const val = safeLocalStorage.getItem("hc_achievements");
+    if (val) {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [wonCup, setWonCup] = useState<boolean>(() => safeLocalStorage.getItem("hc_flag_cup") === "1");
+  const [playedMultiplayer, setPlayedMultiplayer] = useState<boolean>(() => safeLocalStorage.getItem("hc_flag_mp") === "1");
+  const [wonOnHard, setWonOnHard] = useState<boolean>(() => safeLocalStorage.getItem("hc_flag_hard") === "1");
+
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_achievements", JSON.stringify(unlockedAchievements));
+  }, [unlockedAchievements]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_flag_cup", wonCup ? "1" : "0");
+  }, [wonCup]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_flag_mp", playedMultiplayer ? "1" : "0");
+  }, [playedMultiplayer]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_flag_hard", wonOnHard ? "1" : "0");
+  }, [wonOnHard]);
+
+  // Detect newly-earned achievements whenever the relevant stats change.
+  useEffect(() => {
+    const earned = evaluateAchievements({
+      wins: userWins,
+      matches: userMatches,
+      highScore,
+      rating: userRating,
+      coins,
+      dailyStreak,
+      wonCup,
+      playedMultiplayer,
+      wonOnHard,
+    });
+    const fresh = earned.filter((id) => !unlockedAchievements.includes(id));
+    if (fresh.length === 0) return;
+    setUnlockedAchievements((prev) => Array.from(new Set([...prev, ...fresh])));
+    const bonus = fresh.reduce((sum, id) => sum + (ACHIEVEMENTS.find((a) => a.id === id)?.reward || 0), 0);
+    if (bonus > 0) setCoins((prev) => prev + bonus);
+    const first = ACHIEVEMENTS.find((a) => a.id === fresh[0]);
+    if (first) {
+      SoundEffects.playMatchWon();
+      haptic.success();
+      confetti({ particleCount: 90, spread: 70, origin: { y: 0.7 } });
+      triggerToast(`${first.icon} Achievement: ${first.name}! +${bonus} coins`, "success");
+    }
+  }, [userWins, userMatches, highScore, userRating, coins, dailyStreak, wonCup, playedMultiplayer, wonOnHard]);
+
+  // Recent multiplayer opponents (most recent first, capped at 6).
+  const [recentOpponents, setRecentOpponents] = useState<
+    Array<{ name: string; color: string; result: "W" | "L" | "T"; when: number }>
+  >(() => {
+    const val = safeLocalStorage.getItem("hc_recent_opps");
+    if (val) {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+    }
+    return [];
+  });
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_recent_opps", JSON.stringify(recentOpponents));
+  }, [recentOpponents]);
+
+  const recordRecentOpponent = (name: string, color: string, result: "W" | "L" | "T") => {
+    setRecentOpponents((prev) => [{ name, color, result, when: Date.now() }, ...prev].slice(0, 6));
+  };
+
+  // Match format for AI matches: wickets per innings.
+  const [maxWicketsSelected, setMaxWicketsSelected] = useState<number>(1);
 
   const todayStr = () => new Date().toISOString().slice(0, 10);
   const claimedToday = lastDaily === todayStr();
@@ -472,6 +658,14 @@ export default function App() {
       "hc_last_daily",
       "hc_streak",
       "hc_tournament",
+      "hc_owned",
+      "hc_avatar",
+      "hc_frame",
+      "hc_achievements",
+      "hc_flag_cup",
+      "hc_flag_mp",
+      "hc_flag_hard",
+      "hc_recent_opps",
     ].forEach((k) => safeLocalStorage.removeItem(k));
 
     const newId = `u_${Math.random().toString(36).substring(2, 11)}`;
@@ -486,6 +680,14 @@ export default function App() {
     setUserRating(1000);
     setDailyStreak(0);
     setLastDaily("");
+    setOwnedCosmetics([...DEFAULT_OWNED]);
+    setEquippedAvatar("bat");
+    setEquippedFrame("none");
+    setUnlockedAchievements([]);
+    setWonCup(false);
+    setPlayedMultiplayer(false);
+    setWonOnHard(false);
+    setRecentOpponents([]);
     setConfirmDelete(false);
     triggerToast("Your account and data have been deleted.", "success");
     setMode(GameMode.MENU);
@@ -619,6 +821,14 @@ export default function App() {
           setUserSelectedMove(null);
           setPlayersLocked([]);
           setLatestCommentary(payload.commentary);
+
+          // Record the online opponent and mark the multiplayer achievement.
+          setPlayedMultiplayer(true);
+          const opp = payload.matchState?.players?.find((p: any) => p.id !== userId);
+          if (opp) {
+            const isTie = !payload.winnerId;
+            recordRecentOpponent(opp.username, opp.avatarColor, isTie ? "T" : isWinner ? "W" : "L");
+          }
           break;
         }
 
@@ -927,6 +1137,7 @@ export default function App() {
         }));
 
         setCoins((prev) => prev + 500); // Grand cup trophy coins
+        setWonCup(true);
         confetti({ particleCount: 200, spread: 80 });
       }
       setMode(GameMode.TOURNAMENT_LOBBY);
@@ -978,6 +1189,7 @@ export default function App() {
         body: JSON.stringify({
           history: currHistory,
           difficulty: aiDifficulty,
+          aiBatting: !isUserBatting,
         }),
       });
       if (res.ok) {
@@ -1024,26 +1236,55 @@ export default function App() {
 
       if (aiInnings === 1) {
         if (isOut) {
+          const newWickets = aiWickets + 1;
+          const inningsEnds = newWickets >= maxWicketsSelected;
+          setAiWickets(newWickets);
           SoundEffects.playWicketOut();
           setBallAnimationState("OUT");
-          // Innings complete
-          const targetScore = aiScore + 1;
-          setAiTarget(targetScore);
-          setAiInnings(2);
-          setIsUserBatting(false); // Player bowl now
-          setAiScore(0);
-          setBallsCount(0);
-          setAiOvers("0.0");
 
-          const inningsMsg = `OUT! Sensation on the ground! Caught out on ${move}! AI bowler reads you beautifully. You scored ${aiScore} runs. AI needs ${targetScore} runs to win!`;
-          setLatestCommentary(inningsMsg);
-          await generateAICommentary("OUT", aiScore, move, aiPlay, `Innings 1 finished. Batsman out! You made ${aiScore} runs.`);
+          if (inningsEnds) {
+            // Innings complete
+            const targetScore = aiScore + 1;
+            setAiTarget(targetScore);
+            setAiInnings(2);
+            setIsUserBatting(false); // Player bowl now
+            setAiScore(0);
+            setAiWickets(0);
+            setBallsCount(0);
+            setAiOvers("0.0");
 
-          // Log to history
-          setAiMatchHistory((prev) => [
-            ...prev,
-            { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs: 0, isOut: true, commText: inningsMsg, innings: aiInnings, userWasBatting: isUserBatting },
-          ]);
+            const inningsMsg = `OUT! You're all out for ${aiScore}! AI needs ${targetScore} runs to win!`;
+            setLatestCommentary(inningsMsg);
+            await generateAICommentary("OUT", aiScore, move, aiPlay, `Innings 1 finished. Batsman out! You made ${aiScore} runs.`);
+
+            // Log to history
+            setAiMatchHistory((prev) => [
+              ...prev,
+              { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs: 0, isOut: true, commText: inningsMsg, innings: aiInnings, userWasBatting: isUserBatting },
+            ]);
+          } else {
+            // Wicket falls but the innings continues (multi-wicket format).
+            const left = maxWicketsSelected - newWickets;
+            const wktMsg = `WICKET! ${newWickets} down, ${left} to go. A new batsman walks in on ${aiScore} runs.`;
+            setLatestCommentary(wktMsg);
+            setAiMatchHistory((prev) => [
+              ...prev,
+              { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs: 0, isOut: true, commText: wktMsg, innings: aiInnings, userWasBatting: isUserBatting },
+            ]);
+
+            // Overs may also end the innings even with wickets in hand.
+            if (totalBalls >= maxTotalBalls) {
+              const targetScore = aiScore + 1;
+              setAiTarget(targetScore);
+              setAiInnings(2);
+              setIsUserBatting(false);
+              setAiScore(0);
+              setAiWickets(0);
+              setBallsCount(0);
+              setAiOvers("0.0");
+              setLatestCommentary(`Overs completed! You compiled ${aiScore}. AI needs ${targetScore} runs to win the cup!`);
+            }
+          }
         } else {
           SoundEffects.playBallRun(runs);
           setBallAnimationState("RUNS");
@@ -1074,34 +1315,58 @@ export default function App() {
         // Second Innings Play Logic
         const targetValue = aiTarget || 1;
         if (isOut) {
+          const newWickets = aiWickets + 1;
+          const allOut = newWickets >= maxWicketsSelected;
+          setAiWickets(newWickets);
           SoundEffects.playWicketOut();
           setBallAnimationState("OUT");
-          // AI batsman dismissed! User wins!
-          setAiMatchOver(true);
-          setAiWinnerResult("PLAYER_WIN");
-          const victoryMsg = `VICTORY! You did it! You matched the AI with ${move} and took the critical wicket. Defended ${targetValue - 1} runs!`;
-          setLatestCommentary(victoryMsg);
-          confetti({
-            particleCount: 120,
-            angle: 60,
-            spread: 55,
-            origin: { x: 0 },
-          });
-          confetti({
-            particleCount: 120,
-            angle: 120,
-            spread: 55,
-            origin: { x: 1 },
-          });
-          SoundEffects.playMatchWon();
 
-          // Save score to local leaderboard persistence!
-          updateLeaderboardScore(true, targetValue - 1, 1);
+          if (allOut) {
+            // AI is all out! User defends the total and wins.
+            setAiMatchOver(true);
+            setAiWinnerResult("PLAYER_WIN");
+            const victoryMsg = `VICTORY! You bowled them out and defended ${targetValue - 1} runs. What a spell!`;
+            setLatestCommentary(victoryMsg);
+            confetti({
+              particleCount: 120,
+              angle: 60,
+              spread: 55,
+              origin: { x: 0 },
+            });
+            confetti({
+              particleCount: 120,
+              angle: 120,
+              spread: 55,
+              origin: { x: 1 },
+            });
+            SoundEffects.playMatchWon();
 
-          setAiMatchHistory((prev) => [
-            ...prev,
-            { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs: 0, isOut: true, commText: victoryMsg, innings: aiInnings, userWasBatting: isUserBatting },
-          ]);
+            // Save score to local leaderboard persistence!
+            updateLeaderboardScore(true, targetValue - 1, newWickets);
+
+            setAiMatchHistory((prev) => [
+              ...prev,
+              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs: 0, isOut: true, commText: victoryMsg, innings: aiInnings, userWasBatting: isUserBatting },
+            ]);
+          } else {
+            // Wicket falls, AI keeps chasing with the remaining batsmen.
+            const wktMsg = `WICKET! AI loses a batsman (${newWickets} down). Still needs ${targetValue - aiScore} from ${maxTotalBalls - totalBalls} balls.`;
+            setLatestCommentary(wktMsg);
+            setAiMatchHistory((prev) => [
+              ...prev,
+              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs: 0, isOut: true, commText: wktMsg, innings: aiInnings, userWasBatting: isUserBatting },
+            ]);
+
+            // If the overs also run out on this wicket, the user has defended.
+            if (totalBalls >= maxTotalBalls) {
+              setAiMatchOver(true);
+              setAiWinnerResult("PLAYER_WIN");
+              setLatestCommentary(`VICTORY! You held the AI to ${aiScore}/${newWickets}. Target defended!`);
+              confetti({ particleCount: 100 });
+              SoundEffects.playMatchWon();
+              updateLeaderboardScore(true, targetValue - 1, newWickets);
+            }
+          }
         } else {
           SoundEffects.playBallRun(runs);
           setBallAnimationState("RUNS");
@@ -1174,6 +1439,7 @@ export default function App() {
     if (won) {
       setUserWins((prev) => prev + 1);
       setCoins((prev) => prev + 150); // ELO Win cash injection
+      if (aiDifficulty === "HARD") setWonOnHard(true);
     } else {
       setCoins((prev) => prev + 50); // ELO Participation reward
     }
@@ -1486,8 +1752,8 @@ export default function App() {
                       }}
                       className="flex items-center gap-3 text-left group cursor-pointer"
                     >
-                      <div className={`w-12 h-12 rounded-full bg-gradient-to-tr ${avatarColor} flex-shrink-0 border-2 border-slate-105 shadow-md flex items-center justify-center text-lg`}>
-                        🏏
+                      <div className={`w-12 h-12 rounded-full bg-gradient-to-tr ${avatarColor} flex-shrink-0 border-2 border-slate-105 shadow-md flex items-center justify-center text-lg ${currentFrame}`}>
+                        {currentEmoji}
                       </div>
                       <div>
                         <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block font-sans">Tap to edit profile</span>
@@ -1500,7 +1766,7 @@ export default function App() {
                     <div className="text-right">
                       <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block font-sans">Coins Balance</span>
                       <span className="text-sm font-mono font-black text-emerald-800 flex items-center gap-1 justify-end">
-                        🪙 {coins.toLocaleString()}
+                        <Coins className="w-3.5 h-3.5 text-amber-500" /> {coins.toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -1569,25 +1835,53 @@ export default function App() {
                             ))}
                           </div>
                         </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-mono font-bold text-emerald-200 uppercase">Wickets:</span>
+                          <div className="flex gap-1 bg-emerald-950/40 p-0.5 border border-white/10 rounded-xl">
+                            {[1, 3].map((wk) => (
+                              <button
+                                key={wk}
+                                onClick={() => {
+                                  SoundEffects.playClick();
+                                  setMaxWicketsSelected(wk);
+                                }}
+                                className={`px-3 py-1 text-[9px] font-bold rounded-lg font-mono transition cursor-pointer ${
+                                  maxWicketsSelected === wk
+                                    ? "bg-yellow-405 text-slate-950 border border-yellow-300/20"
+                                    : "text-emerald-200 hover:text-white"
+                                }`}
+                              >
+                                {wk} WKT{wk > 1 ? "S" : ""}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 z-10 pt-4 border-t border-white/15 mt-5 font-sans">
+                      <div className="grid grid-cols-3 gap-2 z-10 pt-4 border-t border-white/15 mt-5 font-sans">
+                        <button
+                          onClick={() => handleStartAIMatch(1)}
+                          className="py-3 rounded-2xl text-center text-[11px] font-black bg-yellow-405 text-slate-950 hover:bg-yellow-350 active:scale-97 flex items-center justify-center gap-1 shadow transition cursor-pointer"
+                        >
+                          <Zap className="w-3 h-3 fill-slate-950" /> 1 Over Blitz
+                        </button>
                         <button
                           onClick={() => handleStartAIMatch(2)}
-                          className="py-3 rounded-2xl text-center text-xs font-black bg-white text-emerald-900 hover:bg-slate-100 active:scale-97 flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
+                          className="py-3 rounded-2xl text-center text-[11px] font-black bg-white text-emerald-900 hover:bg-slate-100 active:scale-97 flex items-center justify-center gap-1 shadow transition cursor-pointer"
                         >
-                          <Play className="w-3 h-3 fill-emerald-800 text-emerald-800" /> Start 2 Overs
+                          <Play className="w-3 h-3 fill-emerald-800 text-emerald-800" /> 2 Overs
                         </button>
                         <button
                           onClick={() => handleStartAIMatch(5)}
-                          className="py-3 rounded-2xl text-center text-xs font-black border border-white/25 hover:bg-white/10 active:scale-97 text-white flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          className="py-3 rounded-2xl text-center text-[11px] font-black border border-white/25 hover:bg-white/10 active:scale-97 text-white flex items-center justify-center gap-1 transition cursor-pointer"
                         >
-                          Start 5 Overs
+                          5 Overs
                         </button>
                       </div>
                       <button
                         onClick={() => setShowHowTo(true)}
-                        className="mt-3 mx-auto block text-[10px] text-emerald-100/80 hover:text-white underline font-mono cursor-pointer z-10"
+                        className="mt-3 mx-auto block text-[11px] text-white/90 hover:text-white underline decoration-white/40 font-mono font-bold cursor-pointer z-10"
                       >
                         ❓ How to play
                       </button>
@@ -1732,6 +2026,33 @@ export default function App() {
                           Host Custom Private Match Room
                         </button>
                       </div>
+
+                      {recentOpponents.length > 0 && (
+                        <div className="pt-4 border-t border-slate-100 mt-4 font-sans text-left">
+                          <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 mb-2">
+                            <Clock className="w-3 h-3" /> Recent Opponents
+                          </span>
+                          <div className="space-y-1.5">
+                            {recentOpponents.map((opp, i) => (
+                              <div key={i} className="flex items-center gap-2.5 bg-slate-50 border border-slate-150 rounded-xl px-2.5 py-1.5">
+                                <span className={`w-6 h-6 rounded-full bg-gradient-to-tr ${opp.color} border border-slate-200 flex-shrink-0`} />
+                                <span className="text-[11px] font-black text-slate-700 truncate flex-1">{opp.name}</span>
+                                <span
+                                  className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${
+                                    opp.result === "W"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : opp.result === "L"
+                                      ? "bg-red-100 text-red-600"
+                                      : "bg-slate-200 text-slate-600"
+                                  }`}
+                                >
+                                  {opp.result === "W" ? "WON" : opp.result === "L" ? "LOST" : "TIE"}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </motion.div>
                   )}
 
@@ -1818,60 +2139,167 @@ export default function App() {
                       initial={{ opacity: 0, scale: 0.97 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.97 }}
-                      className="bg-white border border-slate-150 rounded-3xl p-5 flex flex-col justify-between shadow-xl min-h-[300px]"
+                      className="bg-white border border-slate-150 rounded-3xl p-5 shadow-xl max-h-[62vh] overflow-y-auto"
                     >
-                      <div className="space-y-4 text-left font-sans">
-                        <span className="text-[10px] font-mono font-bold text-emerald-700 uppercase tracking-widest block">Daily Rewards & Boosters</span>
+                      {/* Store header + live avatar preview */}
+                      <div className="flex items-center justify-between mb-4 text-left">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-12 h-12 rounded-full bg-gradient-to-tr ${avatarColor} border-2 border-slate-100 shadow-md flex items-center justify-center text-xl ${currentFrame}`}>
+                            {currentEmoji}
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-mono font-bold text-emerald-700 uppercase tracking-widest block">Cosmetics Store</span>
+                            <span className="text-[10px] text-slate-400 font-medium">Spend coins, no real money</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 text-amber-700 font-black text-xs">
+                          <Coins className="w-3.5 h-3.5" /> {coins.toLocaleString()}
+                        </div>
+                      </div>
 
+                      {/* Daily reward */}
+                      <div className="mb-4">
+                        {claimedToday ? (
+                          <div className="space-y-1.5">
+                            <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase text-center">
+                              🔥 Day {dailyStreak} streak • come back tomorrow
+                            </span>
+                            <button
+                              onClick={() => {
+                                SoundEffects.playClick();
+                                AdMobInstance.showRewardedAd(
+                                  (amount) => { setCoins((prev) => prev + amount); },
+                                  () => {}
+                                );
+                              }}
+                              className="w-full py-2.5 bg-yellow-405 hover:bg-yellow-350 text-slate-950 active:scale-97 text-[11px] font-extrabold rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                            >
+                              <Zap className="w-3.5 h-3.5 fill-slate-950 text-emerald-950 animate-pulse" /> Watch Video for +150 Coins
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={handleCollectDailyBonus}
+                            className="w-full py-2.5 bg-emerald-700 text-white hover:bg-emerald-800 active:scale-97 text-[11px] font-extrabold rounded-xl transition shadow cursor-pointer"
+                          >
+                            🎁 Collect Daily Reward
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Avatars */}
+                      <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest block mb-2 text-left flex items-center gap-1.5">
+                        <ShoppingBag className="w-3 h-3" /> Avatars
+                      </span>
+                      <div className="grid grid-cols-3 gap-2 mb-5">
+                        {AVATAR_ITEMS.map((a) => {
+                          const owned = ownedCosmetics.includes(a.id);
+                          const equipped = equippedAvatar === a.id;
+                          return (
+                            <button
+                              key={a.id}
+                              onClick={() => handleEquipAvatar(a.id)}
+                              className={`rounded-2xl p-2.5 border flex flex-col items-center gap-1 transition active:scale-95 cursor-pointer ${
+                                equipped
+                                  ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200"
+                                  : owned
+                                  ? "border-slate-200 bg-white hover:bg-slate-50"
+                                  : "border-slate-150 bg-slate-50 hover:bg-slate-100"
+                              }`}
+                            >
+                              <span className="text-2xl leading-none">{a.emoji}</span>
+                              <span className="text-[8.5px] font-black text-slate-600 leading-tight text-center">{a.name}</span>
+                              {equipped ? (
+                                <span className="text-[8px] font-black text-emerald-700 flex items-center gap-0.5"><Check className="w-2.5 h-2.5" /> Equipped</span>
+                              ) : owned ? (
+                                <span className="text-[8px] font-black text-slate-400 uppercase">Equip</span>
+                              ) : (
+                                <span className="text-[8px] font-black text-amber-600 flex items-center gap-0.5"><Coins className="w-2.5 h-2.5" /> {a.price}</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Frames */}
+                      <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest block mb-2 text-left flex items-center gap-1.5">
+                        <Sparkles className="w-3 h-3" /> Avatar Frames
+                      </span>
+                      <div className="grid grid-cols-3 gap-2 mb-5">
+                        {FRAME_ITEMS.map((f) => {
+                          const owned = ownedCosmetics.includes(f.id);
+                          const equipped = equippedFrame === f.id;
+                          return (
+                            <button
+                              key={f.id}
+                              onClick={() => handleEquipFrame(f.id)}
+                              className={`rounded-2xl p-2.5 border flex flex-col items-center gap-1.5 transition active:scale-95 cursor-pointer ${
+                                equipped
+                                  ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200"
+                                  : owned
+                                  ? "border-slate-200 bg-white hover:bg-slate-50"
+                                  : "border-slate-150 bg-slate-50 hover:bg-slate-100"
+                              }`}
+                            >
+                              <span className={`w-7 h-7 rounded-full bg-gradient-to-tr ${avatarColor} ${f.ring} flex items-center justify-center text-[11px]`}>
+                                {currentEmoji}
+                              </span>
+                              <span className="text-[8.5px] font-black text-slate-600 leading-tight text-center">{f.name}</span>
+                              {equipped ? (
+                                <span className="text-[8px] font-black text-emerald-700 flex items-center gap-0.5"><Check className="w-2.5 h-2.5" /> On</span>
+                              ) : owned ? (
+                                <span className="text-[8px] font-black text-slate-400 uppercase">Equip</span>
+                              ) : (
+                                <span className="text-[8px] font-black text-amber-600 flex items-center gap-0.5"><Coins className="w-2.5 h-2.5" /> {f.price}</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Achievements */}
+                      <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest mb-2 text-left flex items-center gap-1.5">
+                        <Award className="w-3 h-3" /> Achievements
+                        <span className="text-emerald-600">{unlockedAchievements.length}/{ACHIEVEMENTS.length}</span>
+                      </span>
+                      <div className="grid grid-cols-2 gap-2 mb-4">
+                        {ACHIEVEMENTS.map((ach) => {
+                          const done = unlockedAchievements.includes(ach.id);
+                          return (
+                            <div
+                              key={ach.id}
+                              className={`rounded-xl p-2 border flex items-center gap-2 text-left ${
+                                done ? "border-emerald-200 bg-emerald-50" : "border-slate-150 bg-slate-50 opacity-70"
+                              }`}
+                            >
+                              <span className="text-lg leading-none flex-shrink-0">{done ? ach.icon : "🔒"}</span>
+                              <div className="min-w-0">
+                                <span className="text-[9px] font-black text-slate-700 block leading-tight truncate">{ach.name}</span>
+                                <span className="text-[7.5px] font-medium text-slate-400 block leading-tight">{ach.desc}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 font-sans">
                         <button
                           onClick={() => {
                             SoundEffects.playClick();
                             setMode(GameMode.PROFILE);
                           }}
-                          className="w-full py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-black text-xs border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                          className="py-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-black text-[10px] border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                         >
-                          <User className="w-3.5 h-3.5" /> Open Profile & Account
+                          <User className="w-3.5 h-3.5" /> Profile
                         </button>
-
-                        <div className="pt-2">
-                          {claimedToday ? (
-                            <div className="space-y-1.5 block">
-                              <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase text-center">
-                                🔥 Day {dailyStreak} streak • come back tomorrow
-                              </span>
-                              <button
-                                onClick={() => {
-                                  SoundEffects.playClick();
-                                  AdMobInstance.showRewardedAd(
-                                    (amount) => { setCoins((prev) => prev + amount); },
-                                    () => {}
-                                  );
-                                }}
-                                className="w-full py-2.5 bg-yellow-405 hover:bg-yellow-350 text-slate-950 active:scale-97 text-[11px] font-extrabold rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-                              >
-                                <Zap className="w-3.5 h-3.5 fill-slate-950 text-emerald-950 animate-pulse" /> Watch Video for +150 Coins
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={handleCollectDailyBonus}
-                              className="w-full py-2.5 bg-emerald-700 text-white hover:bg-emerald-800 active:scale-97 text-[11px] font-extrabold rounded-xl transition shadow cursor-pointer"
-                            >
-                              🎁 Collect Daily Reward
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="pt-3 border-t border-slate-100 mt-4 font-sans">
                         <button
                           onClick={() => {
                             SoundEffects.playClick();
                             setMode(GameMode.REVENUE_INFO);
                           }}
-                          className="w-full py-2 border border-slate-205 hover:bg-slate-50 text-slate-700 active:scale-97 text-[10px] font-extrabold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                          className="py-2 border border-slate-205 hover:bg-slate-50 text-slate-700 active:scale-97 text-[10px] font-extrabold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
                         >
-                          <TrendingUp className="w-3.5 h-3.5 text-emerald-700" /> Launch In-Game Economy Sim
+                          <TrendingUp className="w-3.5 h-3.5 text-emerald-700" /> Economy Sim
                         </button>
                       </div>
                     </motion.div>
@@ -1952,7 +2380,7 @@ export default function App() {
                     }`}
                   >
                     <Sparkles className="w-4 h-4 mb-0.5" />
-                    <span className="text-[8.5px] font-mono uppercase tracking-wider font-extrabold">Skins</span>
+                    <span className="text-[8.5px] font-mono uppercase tracking-wider font-extrabold">Store</span>
                   </button>
                 </div>
               </motion.div>
@@ -2647,8 +3075,8 @@ export default function App() {
               >
                 <div className="bg-white border border-slate-150 rounded-3xl p-6 shadow-xl space-y-5 text-left">
                   <div className="flex items-center gap-4">
-                    <div className={`w-16 h-16 rounded-full bg-gradient-to-tr ${avatarColor} border-2 border-slate-100 shadow-md flex items-center justify-center text-2xl flex-shrink-0`}>
-                      🏏
+                    <div className={`w-16 h-16 rounded-full bg-gradient-to-tr ${avatarColor} border-2 border-slate-100 shadow-md flex items-center justify-center text-2xl flex-shrink-0 ${currentFrame}`}>
+                      {currentEmoji}
                     </div>
                     <div className="min-w-0">
                       <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Player Profile</span>
@@ -2675,6 +3103,29 @@ export default function App() {
                     <div>
                       <span className="text-[8px] font-mono text-slate-400 block uppercase">Coins</span>
                       <span className="text-sm font-black text-amber-600">{coins}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-mono text-slate-400 uppercase font-black flex items-center gap-1.5">
+                      <Award className="w-3 h-3" /> Achievements
+                      <span className="text-emerald-600">{unlockedAchievements.length}/{ACHIEVEMENTS.length}</span>
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ACHIEVEMENTS.map((ach) => {
+                        const done = unlockedAchievements.includes(ach.id);
+                        return (
+                          <span
+                            key={ach.id}
+                            title={`${ach.name} — ${ach.desc}`}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-base border ${
+                              done ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-150 opacity-60"
+                            }`}
+                          >
+                            {done ? ach.icon : "🔒"}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
 
