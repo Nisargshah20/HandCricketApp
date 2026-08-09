@@ -302,7 +302,7 @@ app.get("/privacy", (_req, res) => {
 // random 3-digit tag ("Vrushali Shah742"); a userId tag is the last resort.
 function makeUniqueUsername(desired: string, userId: string): string {
   const clean =
-    (desired || "").trim().replace(/\s+/g, " ").slice(0, 20) ||
+    (desired || "").trim().replace(/\s+/g, "").slice(0, 20) ||
     `Player_${Math.floor(1000 + Math.random() * 9000)}`;
   const taken = (name: string) =>
     leaderboard.some((p) => p.userId !== userId && p.username.toLowerCase() === name.toLowerCase());

@@ -359,11 +359,76 @@ const GoogleIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   </svg>
 );
 
+// Predict the human's next throw (frequency + Markov + repeat bias).
+function predictPlayerMove(history: Array<{ playerMove: number }>): number | null {
+  const moves = history.map((h) => h.playerMove).filter((m): m is number => !!m);
+  if (moves.length === 0) return null;
+  const last = moves[moves.length - 1];
+  const scores: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+  moves.forEach((m) => (scores[m] += 1));
+  for (let i = 1; i < moves.length; i++) {
+    if (moves[i - 1] === last) scores[moves[i]] += 3;
+  }
+  scores[last] += 1.5;
+  let best = last;
+  let bestScore = -1;
+  for (let m = 1; m <= 6; m++) {
+    if (scores[m] > bestScore) {
+      bestScore = scores[m];
+      best = m;
+    }
+  }
+  return best;
+}
+
+// On-device Hand Cricket AI — mirrors the old server logic, computed instantly.
+function computeAiMove(
+  history: Array<{ playerMove: number; aiMove: number }>,
+  difficulty: "EASY" | "MEDIUM" | "HARD",
+  aiBatting: boolean
+): number {
+  let aiMove = Math.floor(Math.random() * 6) + 1;
+  if (history.length > 0) {
+    const lastPlayerMove = history[history.length - 1].playerMove;
+    if (difficulty === "HARD") {
+      const predicted = predictPlayerMove(history);
+      if (predicted) {
+        if (aiBatting) {
+          const safe = [6, 5, 4, 3, 2, 1].filter((v) => v !== predicted);
+          aiMove = Math.random() < 0.7 ? safe[0] : safe[Math.floor(Math.random() * safe.length)];
+        } else {
+          aiMove = Math.random() < 0.65 ? predicted : Math.floor(Math.random() * 6) + 1;
+        }
+      }
+    } else if (difficulty === "MEDIUM") {
+      if (Math.random() < 0.5) {
+        const potential = [1, 2, 3, 4, 5, 6].filter((v) => v !== lastPlayerMove);
+        aiMove = potential[Math.floor(Math.random() * potential.length)];
+      }
+    }
+  }
+  return aiMove;
+}
+
+// Spoken commentary via the device's built-in text-to-speech.
+function speakCommentary(text: string) {
+  try {
+    if (SoundEffects.isMuted) return;
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text.replace(/["🏏🎙️]/g, "").trim());
+    u.rate = 1.08;
+    u.pitch = 1.05;
+    u.volume = 0.9;
+    synth.speak(u);
+  } catch (e) {}
+}
+
 interface ChatMessage {
   id: string;
   senderId: string;
-  senderName: string;
-  text: string;
+  senderName: string;  text: string;
   emoji?: string;
   timestamp: string;
 }
@@ -715,6 +780,13 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  // Speak the live commentary aloud during matches (device text-to-speech).
+  useEffect(() => {
+    if (mode === GameMode.AI_MATCH || mode === GameMode.MULTIPLAYER_MATCH) {
+      speakCommentary(latestCommentary);
+    }
+  }, [latestCommentary]);
 
   // Multiplayer States
   const [activeRoomId, setActiveRoomId] = useState<string>("");
@@ -1072,8 +1144,14 @@ export default function App() {
   };
 
   const handleMuteToggle = () => {
-    SoundEffects.isMuted = !isAudioMuted;
-    setIsAudioMuted(!isAudioMuted);
+    const nowMuted = !isAudioMuted;
+    SoundEffects.isMuted = nowMuted;
+    setIsAudioMuted(nowMuted);
+    if (nowMuted) {
+      try {
+        window.speechSynthesis?.cancel();
+      } catch (e) {}
+    }
   };
 
   // Generate Live Commentary for AI Match
@@ -1371,27 +1449,9 @@ export default function App() {
     setMode(GameMode.MENU);
   };
 
-  // Hand Cricket Algorithm for AI opponent
-  const getAIMoveForMatch = async (currHistory: Array<{ playerMove: number; aiMove: number }>) => {
-    try {
-      const res = await fetch(apiUrl("/api/ai-move"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          history: currHistory,
-          difficulty: aiDifficulty,
-          aiBatting: !isUserBatting,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.move;
-      }
-    } catch (e) {
-      console.warn("Express AI endpoint error, resolving randomly:", e);
-    }
-    return Math.floor(Math.random() * 6) + 1;
-  };
+  // Hand Cricket Algorithm for AI opponent — computed on-device, instantly.
+  const getAIMoveForMatch = (currHistory: Array<{ playerMove: number; aiMove: number }>) =>
+    computeAiMove(currHistory, aiDifficulty, !isUserBatting);
 
   // Calculate local user throw against AI
   const handleUserPlayAIMove = async (move: number) => {
@@ -1406,7 +1466,7 @@ export default function App() {
       aiMove: isUserBatting ? h.bowlerMove : h.batsmanMove,
     }));
 
-    const aiPlay = await getAIMoveForMatch(recentAIHistory);
+    const aiPlay = getAIMoveForMatch(recentAIHistory);
     setAiMoveAnimation(aiPlay);
     setBallAnimationState("RESOLVING");
     SoundEffects.playBowl();
@@ -1447,7 +1507,6 @@ export default function App() {
 
             const inningsMsg = `OUT! You're all out for ${aiScore}! AI needs ${targetScore} runs to win!`;
             setLatestCommentary(inningsMsg);
-            await generateAICommentary("OUT", aiScore, move, aiPlay, `Innings 1 finished. Batsman out! You made ${aiScore} runs.`);
 
             // Log to history
             setAiMatchHistory((prev) => [
@@ -1621,7 +1680,7 @@ export default function App() {
         setUserMoveAnimation(null);
         setAiMoveAnimation(null);
       }, 1800);
-    }, 1200);
+    }, 900);
   };
 
   // Safe client update statistics back to API database
