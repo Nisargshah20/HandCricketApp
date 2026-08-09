@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { OAuth2Client } from "google-auth-library";
 
 dotenv.config();
 
@@ -157,6 +158,56 @@ app.post("/api/leaderboard", (req, res) => {
   }
   updatePlayerStats(userId, username, !!won, Number(runs || 0), Number(wickets || 0), avatarColor || "from-sky-400 to-indigo-500");
   res.json({ status: "success" });
+});
+
+// Google Sign-In: verify the ID token and create/load a persistent account keyed by Google's stable user id.
+const GOOGLE_WEB_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
+const googleClient = GOOGLE_WEB_CLIENT_ID ? new OAuth2Client(GOOGLE_WEB_CLIENT_ID) : null;
+
+app.post("/api/auth/google", async (req, res) => {
+  if (!googleClient) {
+    return res.status(500).json({ error: "Google auth is not configured on the server" });
+  }
+  const { idToken } = req.body;
+  if (!idToken) {
+    return res.status(400).json({ error: "idToken is required" });
+  }
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken, audience: GOOGLE_WEB_CLIENT_ID });
+    const p = ticket.getPayload();
+    if (!p || !p.sub) {
+      return res.status(401).json({ error: "Invalid Google token" });
+    }
+    const userId = `g_${p.sub}`;
+    let player = leaderboard.find((x) => x.userId === userId);
+    if (!player) {
+      player = {
+        userId,
+        username: p.name || p.email?.split("@")[0] || `Player_${Math.floor(1000 + Math.random() * 9000)}`,
+        wins: 0,
+        matchesPlayed: 0,
+        runsScored: 0,
+        wicketsTaken: 0,
+        avatarColor: "from-sky-400 to-indigo-600",
+        rating: 1000,
+      };
+      leaderboard.push(player);
+      saveLeaderboard(player);
+    }
+    res.json({
+      userId: player.userId,
+      username: player.username,
+      avatarColor: player.avatarColor,
+      email: p.email,
+      picture: p.picture,
+      wins: player.wins,
+      matchesPlayed: player.matchesPlayed,
+      rating: player.rating,
+    });
+  } catch (error) {
+    console.error("Google token verification failed:", error);
+    res.status(401).json({ error: "Authentication failed" });
+  }
 });
 
 // Helper to update player stats on match completion

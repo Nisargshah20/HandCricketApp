@@ -8,6 +8,14 @@
   "plugins": {
     "AdMob": {
       "initializeForTesting": true
+    },
+    "SocialLogin": {
+      "providers": {
+        "google": true,
+        "facebook": false,
+        "apple": false,
+        "twitter": false
+      }
     }
   }
 }

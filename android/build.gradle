@@ -25,6 +25,13 @@ allprojects {
 }
 
 subprojects {
+    // Pin androidx.browser: 1.9.0 requires compileSdk 36 + AGP 8.9.1; 1.8.0 is
+    // compatible and enough (we use Google Credential Manager, not browser flows).
+    configurations.all {
+        resolutionStrategy {
+            force 'androidx.browser:browser:1.8.0'
+        }
+    }
     afterEvaluate { project ->
         if (project.hasProperty('android')) {
             project.android {

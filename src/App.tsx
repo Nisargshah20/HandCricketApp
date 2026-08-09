@@ -12,6 +12,7 @@ import RevenueCenter from "./components/RevenueCenter";
 import AdMobSimulator from "./components/AdMobSimulator";
 import { AdMobInstance } from "./services/admob";
 import { apiUrl, wsUrl } from "./services/api";
+import { googleConfigured, initAuth, googleSignIn, googleSignOut } from "./services/auth";
 import confetti from "canvas-confetti";
 import {
   Trophy,
@@ -185,7 +186,7 @@ export default function App() {
   const [username, setUsername] = useState<string>(() => {
     return safeLocalStorage.getItem("hc_username") || `Player_${Math.floor(1000 + Math.random() * 9000)}`;
   });
-  const [userId] = useState<string>(() => {
+  const [userId, setUserId] = useState<string>(() => {
     let id = safeLocalStorage.getItem("hc_userid");
     if (!id) {
       id = `u_${Math.random().toString(36).substring(2, 11)}`;
@@ -193,6 +194,7 @@ export default function App() {
     }
     return id;
   });
+  const [isSignedIn, setIsSignedIn] = useState<boolean>(() => safeLocalStorage.getItem("hc_google_signed_in") === "1");
   const [avatarColor, setAvatarColor] = useState<string>("from-sky-450 to-indigo-600");
   const [isAudioMuted, setIsAudioMuted] = useState(false);
 
@@ -341,7 +343,39 @@ export default function App() {
   useEffect(() => {
     fetchLeaderboard();
     AdMobInstance.initialize();
+    initAuth().catch(() => {});
   }, []);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const { idToken } = await googleSignIn();
+      const res = await fetch(apiUrl("/api/auth/google"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
+      });
+      if (!res.ok) throw new Error("Server rejected sign-in");
+      const data = await res.json();
+      setUserId(data.userId);
+      safeLocalStorage.setItem("hc_userid", data.userId);
+      if (data.username) setUsername(data.username);
+      if (data.avatarColor) setAvatarColor(data.avatarColor);
+      safeLocalStorage.setItem("hc_google_signed_in", "1");
+      setIsSignedIn(true);
+      triggerToast("Signed in! Your progress is now saved to your Google account.", "success");
+      fetchLeaderboard();
+    } catch (e) {
+      console.error("Google sign-in failed:", e);
+      triggerToast("Google sign-in failed. Please try again.", "error");
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    await googleSignOut();
+    safeLocalStorage.removeItem("hc_google_signed_in");
+    setIsSignedIn(false);
+    triggerToast("Signed out.", "success");
+  };
 
   useEffect(() => {
     if (mode === GameMode.LEADERBOARD) {
@@ -1622,7 +1656,34 @@ export default function App() {
                     >
                       <div className="space-y-4 text-left font-sans">
                         <span className="text-[10px] font-mono font-bold text-emerald-700 uppercase tracking-widest block">Elite Profile Customization</span>
-                        
+
+                        {googleConfigured && (
+                          <div className="space-y-2">
+                            <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Account</label>
+                            {isSignedIn ? (
+                              <button
+                                onClick={() => {
+                                  SoundEffects.playClick();
+                                  handleGoogleSignOut();
+                                }}
+                                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 transition-colors cursor-pointer"
+                              >
+                                Sign out ({username})
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  SoundEffects.playClick();
+                                  handleGoogleSignIn();
+                                }}
+                                className="w-full py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-black text-xs border border-slate-300 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                              >
+                                <span className="text-sky-600">G</span> Sign in with Google to save progress
+                              </button>
+                            )}
+                          </div>
+                        )}
+
                         <div className="space-y-2">
                           <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Edit Player Alias</label>
                           <input
