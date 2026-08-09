@@ -14,6 +14,7 @@ import { AdMobInstance } from "./services/admob";
 import { apiUrl, wsUrl } from "./services/api";
 import { googleConfigured, initAuth, googleSignIn, googleSignOut } from "./services/auth";
 import { App as CapacitorApp } from "@capacitor/app";
+import { haptic } from "./services/haptics";
 import confetti from "canvas-confetti";
 import {
   Trophy,
@@ -79,6 +80,7 @@ class SoundEffects {
   }
 
   public static playBallRun(runs: number) {
+    haptic[runs === 6 ? "medium" : "light"]();
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -100,6 +102,7 @@ class SoundEffects {
   }
 
   public static playWicketOut() {
+    haptic.heavy();
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -120,6 +123,7 @@ class SoundEffects {
   }
 
   public static playMatchWon() {
+    haptic.medium();
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -223,10 +227,12 @@ export default function App() {
     const val = safeLocalStorage.getItem("hc_rating");
     return val ? parseInt(val, 10) : 1000;
   });
-  const [dailyCollectCount, setDailyCollectCount] = useState<number>(() => {
-    const val = safeLocalStorage.getItem("hc_daily_collect");
+  const [lastDaily, setLastDaily] = useState<string>(() => safeLocalStorage.getItem("hc_last_daily") || "");
+  const [dailyStreak, setDailyStreak] = useState<number>(() => {
+    const val = safeLocalStorage.getItem("hc_streak");
     return val ? parseInt(val, 10) : 0;
   });
+  const [showHowTo, setShowHowTo] = useState<boolean>(() => safeLocalStorage.getItem("hc_seen_intro") !== "1");
 
   // Automatically sync statistics on modifications
   useEffect(() => {
@@ -245,14 +251,34 @@ export default function App() {
     safeLocalStorage.setItem("hc_rating", userRating.toString());
   }, [userRating]);
   useEffect(() => {
-    safeLocalStorage.setItem("hc_daily_collect", dailyCollectCount.toString());
-  }, [dailyCollectCount]);
+    safeLocalStorage.setItem("hc_last_daily", lastDaily);
+  }, [lastDaily]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_streak", dailyStreak.toString());
+  }, [dailyStreak]);
+
+  const todayStr = () => new Date().toISOString().slice(0, 10);
+  const claimedToday = lastDaily === todayStr();
 
   const handleCollectDailyBonus = () => {
-    if (dailyCollectCount > 0) return;
+    if (claimedToday) return;
+    // Continue the streak only if the last claim was yesterday, else reset to day 1.
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yesterday = y.toISOString().slice(0, 10);
+    const newStreak = lastDaily === yesterday ? dailyStreak + 1 : 1;
+    const reward = Math.min(100 + (newStreak - 1) * 25, 300);
     SoundEffects.playMatchWon();
-    setCoins((prev) => prev + 100);
-    setDailyCollectCount(1);
+    haptic.success();
+    setCoins((prev) => prev + reward);
+    setDailyStreak(newStreak);
+    setLastDaily(todayStr());
+    triggerToast(`Day ${newStreak} streak! +${reward} coins collected.`, "success");
+  };
+
+  const dismissHowTo = () => {
+    safeLocalStorage.setItem("hc_seen_intro", "1");
+    setShowHowTo(false);
   };
 
   // AI Game Match States
@@ -443,7 +469,8 @@ export default function App() {
       "hc_matches",
       "hc_highscore",
       "hc_rating",
-      "hc_daily_collect",
+      "hc_last_daily",
+      "hc_streak",
       "hc_tournament",
     ].forEach((k) => safeLocalStorage.removeItem(k));
 
@@ -457,7 +484,8 @@ export default function App() {
     setUserMatches(0);
     setHighScore(0);
     setUserRating(1000);
-    setDailyCollectCount(0);
+    setDailyStreak(0);
+    setLastDaily("");
     setConfirmDelete(false);
     triggerToast("Your account and data have been deleted.", "success");
     setMode(GameMode.MENU);
@@ -1295,6 +1323,45 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f7fd] text-slate-900 flex flex-col justify-between font-sans selection:bg-emerald-600 selection:text-white">
+      {/* First-time How To Play overlay */}
+      <AnimatePresence>
+        {showHowTo && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-5"
+            onClick={dismissHowTo}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 space-y-4 text-left"
+            >
+              <div className="text-center">
+                <div className="text-4xl mb-2">🏏</div>
+                <h3 className="text-lg font-display font-black text-slate-900">How to play Hand Cricket</h3>
+              </div>
+              <ul className="space-y-2.5 text-xs text-slate-600 font-medium">
+                <li className="flex gap-2"><span>1️⃣</span><span>Each ball, you and your opponent secretly pick a number from <b>1–6</b>.</span></li>
+                <li className="flex gap-2"><span>2️⃣</span><span>While <b>batting</b>, if your numbers differ you score your number as runs.</span></li>
+                <li className="flex gap-2"><span>❌</span><span>If you both pick the <b>same</b> number, you're <b>OUT</b>!</span></li>
+                <li className="flex gap-2"><span>🔄</span><span>Then you swap and <b>bowl</b> to defend your total.</span></li>
+                <li className="flex gap-2"><span>🏆</span><span>Most runs wins — climb the global ELO leaderboard!</span></li>
+              </ul>
+              <button
+                onClick={dismissHowTo}
+                className="w-full py-3 rounded-2xl bg-emerald-700 hover:bg-emerald-800 text-white font-black text-sm transition active:scale-97 cursor-pointer"
+              >
+                Got it! Let's play
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Dynamic Custom Safe Toast/Banner Notification */}
       <AnimatePresence>
         {toast && (
@@ -1518,6 +1585,12 @@ export default function App() {
                           Start 5 Overs
                         </button>
                       </div>
+                      <button
+                        onClick={() => setShowHowTo(true)}
+                        className="mt-3 mx-auto block text-[10px] text-emerald-100/80 hover:text-white underline font-mono cursor-pointer z-10"
+                      >
+                        ❓ How to play
+                      </button>
                     </motion.div>
                   )}
 
@@ -1761,10 +1834,10 @@ export default function App() {
                         </button>
 
                         <div className="pt-2">
-                          {dailyCollectCount > 0 ? (
+                          {claimedToday ? (
                             <div className="space-y-1.5 block">
                               <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase text-center">
-                                🎁 DAILY FREE COINS CLAIMED
+                                🔥 Day {dailyStreak} streak • come back tomorrow
                               </span>
                               <button
                                 onClick={() => {
@@ -1784,7 +1857,7 @@ export default function App() {
                               onClick={handleCollectDailyBonus}
                               className="w-full py-2.5 bg-emerald-700 text-white hover:bg-emerald-800 active:scale-97 text-[11px] font-extrabold rounded-xl transition shadow cursor-pointer"
                             >
-                              🎁 Collect Today's Free +100 Coins
+                              🎁 Collect Daily Reward
                             </button>
                           )}
                         </div>
