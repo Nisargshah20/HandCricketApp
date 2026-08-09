@@ -603,8 +603,10 @@ wss.on("connection", (ws) => {
             },
           });
 
-          // Check if both moves are sealed
-          if (match.players.length === 2 && Object.keys(match.moves).length === 2) {
+          // Check if both moves are sealed (both distinct players have submitted)
+          const bothLockedIn =
+            match.players.length === 2 && match.players.every((p) => match.moves[p.id] != null);
+          if (bothLockedIn) {
             // Resolve the Ball completely!
             await resolveBall(match);
           }

@@ -318,6 +318,7 @@ export default function App() {
   const [isLeaderboardLoading, setIsLeaderboardLoading] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const pendingWsRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -385,7 +386,10 @@ export default function App() {
 
   // WebSocket Connection Handler
   const connectWebSocket = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
       return wsRef.current;
     }
 
@@ -400,13 +404,16 @@ export default function App() {
 
     ws.onopen = () => {
       console.log("WebSocket connection established");
-      // Register player instantly with server
+      // Register player first, then flush any actions queued while connecting.
       ws.send(
         JSON.stringify({
           type: "REGISTER_USER",
           payload: { userId, username, avatarColor },
         })
       );
+      const pending = pendingWsRef.current;
+      pendingWsRef.current = [];
+      pending.forEach((m) => ws.send(m));
     };
 
     ws.onmessage = (event) => {
@@ -1086,13 +1093,24 @@ export default function App() {
     }
   };
 
+  // Queue-aware sender: guarantees REGISTER_USER goes first and no message is
+  // dropped while the socket is still in CONNECTING state.
+  const sendWs = (payload: object): boolean => {
+    const ws = connectWebSocket();
+    if (!ws) return false;
+    const msg = JSON.stringify(payload);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(msg);
+    } else {
+      pendingWsRef.current.push(msg);
+    }
+    return true;
+  };
+
   // Multiplayer Actions
   const handleJoinQuickLobby = () => {
     SoundEffects.playClick();
-    const ws = connectWebSocket();
-    if (ws) {
-      ws.send(JSON.stringify({ type: "JOIN_QUICK_MATCH" }));
-    }
+    sendWs({ type: "JOIN_QUICK_MATCH" });
   };
 
   const handleCancelQuickMatch = () => {
@@ -1105,15 +1123,7 @@ export default function App() {
 
   const handleCreatePrivateRoom = () => {
     SoundEffects.playClick();
-    const ws = connectWebSocket();
-    if (ws) {
-      ws.send(
-        JSON.stringify({
-          type: "CREATE_PRIVATE_ROOM",
-          payload: { maxOvers: 2 },
-        })
-      );
-    }
+    sendWs({ type: "CREATE_PRIVATE_ROOM", payload: { maxOvers: 2 } });
   };
 
   const handleJoinPrivateRoom = () => {
@@ -1122,27 +1132,14 @@ export default function App() {
       return;
     }
     SoundEffects.playClick();
-    const ws = connectWebSocket();
-    if (ws) {
-      ws.send(
-        JSON.stringify({
-          type: "JOIN_ROOM",
-          payload: { roomId: roomCodeInput.trim() },
-        })
-      );
-    }
+    sendWs({ type: "JOIN_ROOM", payload: { roomId: roomCodeInput.trim().toUpperCase() } });
   };
 
   const handlePlayMultiplayerMove = (move: number) => {
-    if (userSelectedMove !== null || !wsRef.current) return;
+    if (userSelectedMove !== null) return;
     setUserSelectedMove(move);
     SoundEffects.playClick();
-    wsRef.current.send(
-      JSON.stringify({
-        type: "PLAY_HAND",
-        payload: { move },
-      })
-    );
+    sendWs({ type: "PLAY_HAND", payload: { move } });
   };
 
   const handleSendChatText = (e: React.FormEvent) => {
