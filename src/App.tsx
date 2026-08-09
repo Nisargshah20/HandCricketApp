@@ -282,6 +282,47 @@ class SoundEffects {
     } catch (e) {}
   }
 
+  // Triumphant stadium fanfare for the app intro.
+  public static playIntroJingle() {
+    this.playCrowdCheer(1.6);
+    if (this.isMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const notes = [392.0, 523.25, 659.25, 783.99]; // G-C-E-G rising fanfare
+      notes.forEach((note, i) => {
+        const t = ctx.currentTime + i * 0.16;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(note, t);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.14, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.42);
+      });
+      // Final held major chord.
+      const t2 = ctx.currentTime + notes.length * 0.16;
+      [523.25, 659.25, 783.99].forEach((note) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(note, t2);
+        g.gain.setValueAtTime(0.0001, t2);
+        g.gain.exponentialRampToValueAtTime(0.1, t2 + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.001, t2 + 0.75);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(t2);
+        osc.stop(t2 + 0.78);
+      });
+    } catch (e) {}
+  }
+
   public static playMatchWon() {
     haptic.medium();
     this.playCrowdCheer(1.4);
@@ -404,6 +445,39 @@ export default function App() {
     return val ? parseInt(val, 10) : 0;
   });
   const [showHowTo, setShowHowTo] = useState<boolean>(() => safeLocalStorage.getItem("hc_seen_intro") !== "1");
+
+  // Animated intro splash shown on every launch (music plays on tap).
+  const [showIntro, setShowIntro] = useState<boolean>(true);
+  const dismissIntro = () => {
+    SoundEffects.playIntroJingle();
+    setShowIntro(false);
+  };
+  useEffect(() => {
+    if (!showIntro) return;
+    const t = setTimeout(() => setShowIntro(false), 5000);
+    return () => clearTimeout(t);
+  }, [showIntro]);
+
+  // Ask the server for a unique display name; adopt whatever it returns.
+  const handleClaimUsername = async () => {
+    const desired = username.trim();
+    if (!desired) return;
+    try {
+      const res = await fetch(apiUrl("/api/username"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, username: desired }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.username && data.username !== desired) {
+        setUsername(data.username);
+        triggerToast(`That name was taken — you're now "${data.username}".`, "info");
+      }
+    } catch (e) {
+      // Offline / server unavailable: keep the local name.
+    }
+  };
 
   // Automatically sync statistics on modifications
   useEffect(() => {
@@ -1583,6 +1657,7 @@ export default function App() {
       if (scoreRes.ok) {
         const scoreData = await scoreRes.json();
         if (typeof scoreData.rating === "number") setUserRating(scoreData.rating);
+        if (scoreData.username && scoreData.username !== username) setUsername(scoreData.username);
       }
       // Trigger a silent REST payload save on backend
       const res = await fetch(apiUrl("/api/leaderboard"));
@@ -1707,6 +1782,59 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f7fd] text-slate-900 flex flex-col justify-between font-sans selection:bg-emerald-600 selection:text-white">
+      {/* Animated intro splash (music plays on tap) */}
+      <AnimatePresence>
+        {showIntro && (
+          <motion.div
+            key="intro-splash"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+            onClick={dismissIntro}
+            className="fixed inset-0 z-[300] bg-gradient-to-b from-emerald-900 via-emerald-800 to-teal-950 flex flex-col items-center justify-center cursor-pointer overflow-hidden select-none"
+          >
+            <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff10_1px,transparent_1px),linear-gradient(to_bottom,#ffffff10_1px,transparent_1px)] bg-[size:2rem_2rem] opacity-40 pointer-events-none" />
+            <motion.div
+              initial={{ scale: 0.4, rotate: -25, opacity: 0 }}
+              animate={{ scale: 1, rotate: 0, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 200, damping: 13 }}
+              className="w-28 h-28 rounded-3xl bg-gradient-to-tr from-yellow-400 to-amber-500 flex items-center justify-center text-6xl shadow-2xl mb-6 z-10"
+            >
+              🏏
+            </motion.div>
+            <motion.h1
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.25 }}
+              className="text-3xl sm:text-4xl font-display font-black text-white tracking-tight flex items-center gap-2 z-10"
+            >
+              HAND CRICKET
+              <span className="bg-yellow-400 text-emerald-950 px-2 py-0.5 rounded-full text-[11px] font-mono font-extrabold tracking-widest uppercase">
+                PRO
+              </span>
+            </motion.h1>
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+              className="text-emerald-100/70 font-mono text-xs sm:text-sm mt-2 z-10"
+            >
+              Stadium Edition • Rising Champions Arena
+            </motion.p>
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1 }}
+              className="mt-10 z-10"
+            >
+              <span className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-white text-emerald-900 font-black text-sm shadow-xl animate-pulse">
+                <Play className="w-4 h-4 fill-emerald-800 text-emerald-800" /> Tap to Play
+              </span>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* First-time How To Play overlay */}
       <AnimatePresence>
         {showHowTo && (
@@ -3272,6 +3400,7 @@ export default function App() {
                       maxLength={18}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
+                      onBlur={handleClaimUsername}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-black text-slate-800 focus:outline-none focus:border-emerald-600 transition"
                     />
                   </div>

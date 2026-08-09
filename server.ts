@@ -162,7 +162,23 @@ app.post("/api/leaderboard", (req, res) => {
     avatarColor || "from-sky-400 to-indigo-500",
     Number(opponentRating || 1000)
   );
-  res.json({ status: "success", rating: updated.rating, wins: updated.wins, matchesPlayed: updated.matchesPlayed });
+  res.json({ status: "success", rating: updated.rating, wins: updated.wins, matchesPlayed: updated.matchesPlayed, username: updated.username });
+});
+
+// Claim a unique display name for a player. Returns the final (possibly
+// suffixed) name; the client should adopt whatever it gets back.
+app.post("/api/username", (req, res) => {
+  const { userId, username } = req.body;
+  if (!userId || !username) {
+    return res.status(400).json({ error: "userId and username are required" });
+  }
+  const unique = makeUniqueUsername(String(username), String(userId));
+  const player = leaderboard.find((p) => p.userId === userId);
+  if (player) {
+    player.username = unique;
+    saveLeaderboard(player);
+  }
+  res.json({ username: unique });
 });
 
 // Google Sign-In: verify the ID token and create/load a persistent account keyed by Google's stable user id.
@@ -188,7 +204,7 @@ app.post("/api/auth/google", async (req, res) => {
     if (!player) {
       player = {
         userId,
-        username: p.name || p.email?.split("@")[0] || `Player_${Math.floor(1000 + Math.random() * 9000)}`,
+        username: makeUniqueUsername(p.name || p.email?.split("@")[0] || `Player_${Math.floor(1000 + Math.random() * 9000)}`, userId),
         wins: 0,
         matchesPlayed: 0,
         runsScored: 0,
@@ -253,6 +269,52 @@ app.get("/delete-account", (_req, res) => {
 </body></html>`);
 });
 
+// Public privacy policy page (URL required by the Play Store listing).
+app.get("/privacy", (_req, res) => {
+  res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hand Cricket Pro — Privacy Policy</title>
+<style>body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;color:#0f172a;line-height:1.6}h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:1.5rem}code{background:#f1f5f9;padding:2px 6px;border-radius:6px}</style>
+</head><body>
+<h1>Privacy Policy — Hand Cricket Pro</h1>
+<p><em>Last updated: 9 August 2026</em></p>
+<p>Hand Cricket Pro ("the app") is a casual cricket game. This policy explains what data we handle.</p>
+<h2>Information we collect</h2>
+<ul>
+<li><strong>Profile data:</strong> a display name and avatar colour you choose. These are stored to power the global leaderboard.</li>
+<li><strong>Game stats:</strong> your ELO rating, wins, matches, runs and wickets.</li>
+<li><strong>Google Sign-In (optional):</strong> if you sign in, we receive your Google account's stable user id, name and email solely to save your progress. We never see your Google password.</li>
+<li><strong>Advertising:</strong> the app may show ads via Google AdMob, which may use device identifiers per Google's policies.</li>
+</ul>
+<h2>How we use it</h2>
+<p>Data is used only to run the game, save your progress and display leaderboards. We do not sell your personal data.</p>
+<h2>Data deletion</h2>
+<p>You can permanently delete your account and all associated data at any time from <strong>Profile → Danger zone → Delete my account &amp; data</strong>, or see <a href="/delete-account">/delete-account</a>.</p>
+<h2>Children</h2>
+<p>The app is not directed at children under 13 and does not knowingly collect their data.</p>
+<h2>Contact</h2>
+<p>For any privacy questions, contact the developer through the Google Play Store listing.</p>
+</body></html>`);
+});
+
+// Ensure a display name is unique across all other players. Collisions get a
+// numeric suffix ("Vrushali Shah 2"); as a last resort a userId-based tag.
+function makeUniqueUsername(desired: string, userId: string): string {
+  const clean =
+    (desired || "").trim().replace(/\s+/g, " ").slice(0, 20) ||
+    `Player_${Math.floor(1000 + Math.random() * 9000)}`;
+  const taken = (name: string) =>
+    leaderboard.some((p) => p.userId !== userId && p.username.toLowerCase() === name.toLowerCase());
+  if (!taken(clean)) return clean;
+  for (let i = 2; i <= 999; i++) {
+    const suffix = ` ${i}`;
+    const candidate = clean.slice(0, 20 - suffix.length) + suffix;
+    if (!taken(candidate)) return candidate;
+  }
+  return clean.slice(0, 15) + "#" + userId.slice(-4);
+}
+
 // Helper to update player stats on match completion
 function updatePlayerStats(
   userId: string,
@@ -267,7 +329,7 @@ function updatePlayerStats(
   if (!player) {
     player = {
       userId,
-      username: username || `Player_${Math.floor(1000 + Math.random() * 9000)}`,
+      username: makeUniqueUsername(username, userId),
       wins: 0,
       matchesPlayed: 0,
       runsScored: 0,
@@ -281,7 +343,7 @@ function updatePlayerStats(
   player.matchesPlayed += 1;
   player.runsScored += runs;
   player.wicketsTaken += wickets;
-  if (username) player.username = username;
+  if (username) player.username = makeUniqueUsername(username, userId);
   if (avatarColor) player.avatarColor = avatarColor;
 
   if (won) player.wins += 1;
