@@ -451,6 +451,19 @@ interface MatchState {
 const activeMatches = new Map<string, MatchState>();
 const matchQueue: { ws: WebSocket; id: string; username: string; avatarColor: string }[] = [];
 
+// Find a player's live match by their id. Quick-match's waiting player never
+// gets activeRoomId set on their own connection, so we must look it up here.
+function findMatchByPlayer(playerId: string): MatchState | undefined {
+  let finished: MatchState | undefined;
+  for (const m of activeMatches.values()) {
+    if (m.players.some((p) => p.id === playerId)) {
+      if (m.status !== "FINISHED") return m;
+      finished = m;
+    }
+  }
+  return finished;
+}
+
 // Broadcast message helper
 function broadcastToMatch(match: MatchState, payload: object) {
   const msg = JSON.stringify(payload);
@@ -686,8 +699,8 @@ wss.on("connection", (ws) => {
         }
 
         case "PLAY_HAND": {
-          if (!playerInfo || !playerInfo.activeRoomId) return;
-          const match = activeMatches.get(playerInfo.activeRoomId);
+          if (!playerInfo) return;
+          const match = findMatchByPlayer(playerInfo.id);
           if (!match || match.status !== "PLAYING") return;
 
           const playerMove = parseInt(payload.move, 10);
@@ -717,8 +730,8 @@ wss.on("connection", (ws) => {
         }
 
         case "SEND_CHAT": {
-          if (!playerInfo || !playerInfo.activeRoomId) return;
-          const match = activeMatches.get(playerInfo.activeRoomId);
+          if (!playerInfo) return;
+          const match = findMatchByPlayer(playerInfo.id);
           if (!match) return;
 
           broadcastToMatch(match, {
@@ -734,8 +747,8 @@ wss.on("connection", (ws) => {
         }
 
         case "REQUEST_REMATCH": {
-          if (!playerInfo || !playerInfo.activeRoomId) return;
-          const match = activeMatches.get(playerInfo.activeRoomId);
+          if (!playerInfo) return;
+          const match = findMatchByPlayer(playerInfo.id);
           if (!match) return;
 
           match.rematchRequested[playerInfo.id] = true;
@@ -794,16 +807,16 @@ wss.on("connection", (ws) => {
       matchQueue.splice(qIndex, 1);
     }
 
-    if (playerInfo.activeRoomId) {
-      const match = activeMatches.get(playerInfo.activeRoomId);
-      if (match) {
+    const match = findMatchByPlayer(playerInfo.id);
+    if (match) {
+      {
         // Remove from players array
         const pIndex = match.players.findIndex((p) => p.id === playerInfo!.id);
         if (pIndex > -1) {
           match.players.splice(pIndex, 1);
           // If no players are left, destroy the match
           if (match.players.length === 0) {
-            activeMatches.delete(playerInfo.activeRoomId);
+            activeMatches.delete(match.id);
           } else {
             // Declare remaining player the winner
             match.status = "FINISHED";
