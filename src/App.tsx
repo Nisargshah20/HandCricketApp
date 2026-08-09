@@ -8,7 +8,6 @@ import {
   TournamentMatch,
   TournamentState,
 } from "./types";
-import RevenueCenter from "./components/RevenueCenter";
 import AdMobSimulator from "./components/AdMobSimulator";
 import { AdMobInstance } from "./services/admob";
 import { apiUrl, wsUrl } from "./services/api";
@@ -30,7 +29,6 @@ import {
   Users,
   Bot,
   Zap,
-  TrendingUp,
   Volume2,
   VolumeX,
   Send,
@@ -48,7 +46,6 @@ import {
   Crown,
   Share2,
   User,
-  LogIn,
   Edit3,
   Coins,
   Award,
@@ -93,9 +90,117 @@ class SoundEffects {
     }
   }
 
+  // Percussive "willow knock" of bat meeting ball — the core cricket feel.
+  public static playBatHit() {
+    if (this.isMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      // Low thump of the impact.
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(175, now);
+      osc.frequency.exponentialRampToValueAtTime(55, now + 0.09);
+      g.gain.setValueAtTime(0.22, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.14);
+      // Short bright crack of the willow.
+      const dur = 0.05;
+      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 2200;
+      bp.Q.value = 0.8;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.3, now);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      noise.connect(bp);
+      bp.connect(ng);
+      ng.connect(ctx.destination);
+      noise.start(now);
+      noise.stop(now + dur);
+    } catch (e) {}
+  }
+
+  // Rapid cluster of wooden knocks — stumps and bails on a dismissal.
+  public static playStumps() {
+    if (this.isMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      for (let k = 0; k < 3; k++) {
+        const t = ctx.currentTime + k * 0.05;
+        const dur = 0.06;
+        const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+        const noise = ctx.createBufferSource();
+        noise.buffer = buf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = "bandpass";
+        bp.frequency.value = 520 - k * 90;
+        bp.Q.value = 1.2;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.28, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        noise.connect(bp);
+        bp.connect(g);
+        g.connect(ctx.destination);
+        noise.start(t);
+        noise.stop(t + dur);
+      }
+    } catch (e) {}
+  }
+
+  // Airy whoosh of the ball being delivered down the pitch.
+  public static playBowl() {
+    if (this.isMuted) return;
+    try {
+      this.initCtx();
+      if (!this.ctx) return;
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      const dur = 0.32;
+      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        const t = i / d.length;
+        d[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * t);
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.Q.value = 1.5;
+      bp.frequency.setValueAtTime(600, now);
+      bp.frequency.exponentialRampToValueAtTime(1600, now + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.07, now + 0.1);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      noise.connect(bp);
+      bp.connect(g);
+      g.connect(ctx.destination);
+      noise.start(now);
+      noise.stop(now + dur);
+    } catch (e) {}
+  }
+
   public static playBallRun(runs: number) {
     haptic[runs === 6 ? "medium" : "light"]();
-    // Crowd reacts to boundaries.
+    // Bat connects on every scoring shot; crowd erupts on boundaries.
+    this.playBatHit();
     if (runs >= 4) this.playCrowdCheer(runs === 6 ? 1.1 : 0.7);
     if (this.isMuted) return;
     try {
@@ -121,6 +226,8 @@ class SoundEffects {
     haptic.heavy();
     // Sharp double-buzz so a wicket feels distinct from a run.
     setTimeout(() => haptic.medium(), 120);
+    // Stumps and bails clatter.
+    this.playStumps();
     if (this.isMuted) return;
     try {
       this.initCtx();
@@ -200,6 +307,16 @@ class SoundEffects {
     } catch (e) {}
   }
 }
+
+// Official multi-colour Google "G" mark for the sign-in button.
+const GoogleIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg viewBox="0 0 48 48" className={className} aria-hidden="true">
+    <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
+    <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
+    <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
+    <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
+  </svg>
+);
 
 interface ChatMessage {
   id: string;
@@ -1218,6 +1335,7 @@ export default function App() {
     const aiPlay = await getAIMoveForMatch(recentAIHistory);
     setAiMoveAnimation(aiPlay);
     setBallAnimationState("RESOLVING");
+    SoundEffects.playBowl();
 
     // Process play outcome after standard windup animation
     setTimeout(async () => {
@@ -1635,9 +1753,9 @@ export default function App() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.15 } }}
-            className="fixed top-4 inset-x-0 z-[150] px-4 flex justify-center pointer-events-none"
+            className="fixed top-[4.75rem] inset-x-0 z-[60] px-3 flex justify-center pointer-events-none"
           >
-            <div className={`pointer-events-auto w-full max-w-sm p-4 rounded-2xl shadow-xl border flex items-start gap-3 backdrop-blur-md ${
+            <div className={`pointer-events-auto w-full max-w-xs p-3 rounded-2xl shadow-xl border flex items-start gap-2.5 backdrop-blur-md ${
               toast.type === "error"
                 ? "bg-red-50/95 border-red-200 text-red-900"
                 : toast.type === "success"
@@ -1663,32 +1781,32 @@ export default function App() {
 
       {/* Stadium Turf Luxury Header */}
       <header className="bg-gradient-to-r from-emerald-900 via-emerald-800 to-teal-900 border-b-4 border-yellow-500 sticky top-0 z-50 py-3 px-4 md:px-6 shadow-xl shadow-emerald-905/10">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           <button
             onClick={() => {
               SoundEffects.playClick();
               setMode(GameMode.MENU);
             }}
-            className="flex items-center gap-3 text-left group"
+            className="flex items-center gap-2 text-left group min-w-0 flex-1"
           >
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-yellow-400 to-amber-500 flex items-center justify-center text-xl shadow-lg transition duration-300 group-hover:rotate-12 group-hover:scale-105">
+            <div className="w-9 h-9 md:w-10 md:h-10 rounded-2xl bg-gradient-to-tr from-yellow-400 to-amber-500 flex items-center justify-center text-lg md:text-xl shadow-lg transition duration-300 group-hover:rotate-12 group-hover:scale-105 flex-shrink-0">
               🏏
             </div>
-            <div>
-              <h1 className="text-md md:text-lg font-display font-black tracking-tight text-white flex items-center gap-1.5 leading-none">
-                HAND CRICKET
-                <span className="bg-yellow-400 text-emerald-950 px-2 py-0.5 rounded-full text-[9px] font-mono font-extrabold tracking-widest uppercase">
+            <div className="min-w-0">
+              <h1 className="text-sm md:text-lg font-display font-black tracking-tight text-white flex items-center gap-1.5 leading-none">
+                <span className="truncate">HAND CRICKET</span>
+                <span className="flex-shrink-0 bg-yellow-400 text-emerald-950 px-1.5 py-0.5 rounded-full text-[8px] md:text-[9px] font-mono font-extrabold tracking-widest uppercase">
                   PRO
                 </span>
               </h1>
-              <p className="text-[10px] text-emerald-100/70 font-mono tracking-wide">Stadium Edition • Rising Champions Arena</p>
+              <p className="text-[9px] md:text-[10px] text-emerald-100/70 font-mono tracking-wide truncate hidden sm:block">Stadium Edition • Rising Champions Arena</p>
             </div>
           </button>
 
           {/* Luxury stats scoreboard pills */}
-          <div className="flex items-center gap-2 md:gap-4">
-            <div className="bg-emerald-950/40 border border-emerald-500/20 rounded-2xl px-3 py-1.5 flex items-center gap-2 text-xs text-white">
-              <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
+          <div className="flex items-center gap-1.5 md:gap-4 flex-shrink-0">
+            <div className="bg-emerald-950/40 border border-emerald-500/20 rounded-2xl px-2.5 py-1.5 flex items-center gap-1.5 text-xs text-white">
+              <Sparkles className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
               <span className="font-mono font-extrabold text-yellow-300">{coins.toLocaleString()}</span>
               <span className="text-[9px] text-emerald-100 font-mono hidden sm:inline uppercase">Coins</span>
             </div>
@@ -1700,10 +1818,10 @@ export default function App() {
             </div>
 
             {/* Mute toggle / Return home buttons */}
-            <div className="flex items-center gap-2 border-l border-emerald-700/55 pl-2 md:pl-4">
+            <div className="flex items-center gap-1.5 md:gap-2 border-l border-emerald-700/55 pl-1.5 md:pl-4">
               <button
                 onClick={handleMuteToggle}
-                className="p-2 rounded-xl border border-emerald-700/10 bg-emerald-950/20 hover:bg-emerald-950/50 text-white transition shadow-sm"
+                className="p-2 rounded-xl border border-emerald-700/10 bg-emerald-950/20 hover:bg-emerald-950/50 text-white transition shadow-sm flex-shrink-0"
                 title={isAudioMuted ? "Unmute" : "Mute Sound"}
               >
                 {isAudioMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-yellow-400" />}
@@ -1719,10 +1837,10 @@ export default function App() {
                       setMode(GameMode.MENU);
                     }
                   }}
-                  className="px-3 py-1.5 rounded-xl border border-yellow-500/20 bg-yellow-400 hover:bg-yellow-350 text-slate-950 text-xs font-black flex items-center gap-1 transition"
+                  className="px-2.5 md:px-3 py-1.5 rounded-xl border border-yellow-500/20 bg-yellow-400 hover:bg-yellow-350 text-slate-950 text-xs font-black flex items-center gap-1 transition flex-shrink-0"
                 >
                   <Home className="w-3.5 h-3.5" />
-                  Lobby
+                  <span className="hidden sm:inline">Lobby</span>
                 </button>
               )}
             </div>
@@ -2282,24 +2400,15 @@ export default function App() {
                         })}
                       </div>
 
-                      <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 font-sans">
+                      <div className="pt-3 border-t border-slate-100 font-sans">
                         <button
                           onClick={() => {
                             SoundEffects.playClick();
                             setMode(GameMode.PROFILE);
                           }}
-                          className="py-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-black text-[10px] border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                          className="w-full py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-black text-[11px] border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                         >
-                          <User className="w-3.5 h-3.5" /> Profile
-                        </button>
-                        <button
-                          onClick={() => {
-                            SoundEffects.playClick();
-                            setMode(GameMode.REVENUE_INFO);
-                          }}
-                          className="py-2 border border-slate-205 hover:bg-slate-50 text-slate-700 active:scale-97 text-[10px] font-extrabold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <TrendingUp className="w-3.5 h-3.5 text-emerald-700" /> Economy Sim
+                          <User className="w-3.5 h-3.5" /> Open Profile & Account
                         </button>
                       </div>
                     </motion.div>
@@ -3150,7 +3259,7 @@ export default function App() {
                           }}
                           className="w-full py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-black text-xs border border-slate-300 transition cursor-pointer flex items-center justify-center gap-2"
                         >
-                          <LogIn className="w-3.5 h-3.5 text-sky-600" /> Sign in with Google to save progress
+                          <GoogleIcon className="w-4 h-4" /> Sign in with Google to save progress
                         </button>
                       )}
                     </div>
@@ -3233,26 +3342,6 @@ export default function App() {
                     className="px-6 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition cursor-pointer active:scale-95"
                   >
                     Return to Lobby
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* 5. REVENUE GUIDE */}
-            {mode === GameMode.REVENUE_INFO && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                <RevenueCenter />
-                <div className="text-center">
-                  <button
-                    onClick={() => setMode(GameMode.MENU)}
-                    className="px-6 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-xs font-bold rounded-xl text-slate-700 transition cursor-pointer active:scale-95 shadow-sm"
-                  >
-                    Return to Main Menu
                   </button>
                 </div>
               </motion.div>
