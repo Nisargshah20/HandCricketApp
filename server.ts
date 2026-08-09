@@ -215,6 +215,44 @@ app.post("/api/auth/google", async (req, res) => {
   }
 });
 
+// Account deletion (Google Play data-deletion requirement): erases the player's
+// leaderboard record from both the in-memory board and the database.
+app.post("/api/auth/delete", (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
+  }
+  leaderboard = leaderboard.filter((p) => p.userId !== userId);
+  if (usePg && pgPool) {
+    pgPool
+      .query("DELETE FROM leaderboard WHERE user_id = $1", [userId])
+      .catch((e) => console.error("Failed to delete player from DB:", e));
+  } else {
+    saveLeaderboard();
+  }
+  res.json({ status: "deleted" });
+});
+
+// Public account-deletion info page (URL required by the Play Store listing).
+app.get("/delete-account", (_req, res) => {
+  res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Delete your Hand Cricket account</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#0f172a;line-height:1.6}h1{font-size:1.4rem}code{background:#f1f5f9;padding:2px 6px;border-radius:6px}</style>
+</head><body>
+<h1>Delete your Hand Cricket Pro account</h1>
+<p>You can permanently delete your account and all associated data (username, ELO rating, wins, matches and leaderboard entry) directly inside the app:</p>
+<ol>
+<li>Open <strong>Hand Cricket Pro</strong>.</li>
+<li>Tap your <strong>profile card</strong> at the top of the lobby.</li>
+<li>Scroll to <strong>Danger zone</strong> and tap <strong>Delete my account &amp; data</strong>.</li>
+<li>Confirm. Your record is removed from our servers immediately.</li>
+</ol>
+<p>Deleted data: profile name, avatar colour, ELO rating, wins, matches, runs and wickets. We do not retain backups of deleted accounts. If you need help, contact the developer through the Play Store listing.</p>
+</body></html>`);
+});
+
 // Helper to update player stats on match completion
 function updatePlayerStats(
   userId: string,

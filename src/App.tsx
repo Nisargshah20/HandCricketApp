@@ -417,6 +417,51 @@ export default function App() {
     triggerToast("Signed out.", "success");
   };
 
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    try {
+      await fetch(apiUrl("/api/auth/delete"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+    } catch (e) {
+      console.warn("Account deletion request failed:", e);
+    }
+    try {
+      await googleSignOut();
+    } catch {
+      // already signed out
+    }
+    [
+      "hc_username",
+      "hc_google_signed_in",
+      "hc_coins",
+      "hc_wins",
+      "hc_matches",
+      "hc_highscore",
+      "hc_rating",
+      "hc_daily_collect",
+      "hc_tournament",
+    ].forEach((k) => safeLocalStorage.removeItem(k));
+
+    const newId = `u_${Math.random().toString(36).substring(2, 11)}`;
+    safeLocalStorage.setItem("hc_userid", newId);
+    setUserId(newId);
+    setUsername(`Player_${Math.floor(1000 + Math.random() * 9000)}`);
+    setIsSignedIn(false);
+    setCoins(2450);
+    setUserWins(0);
+    setUserMatches(0);
+    setHighScore(0);
+    setUserRating(1000);
+    setDailyCollectCount(0);
+    setConfirmDelete(false);
+    triggerToast("Your account and data have been deleted.", "success");
+    setMode(GameMode.MENU);
+  };
+
   useEffect(() => {
     if (mode === GameMode.LEADERBOARD) {
       fetchLeaderboard();
@@ -1456,6 +1501,13 @@ export default function App() {
                             ))}
                           </div>
                         </div>
+                        <p className="text-[10px] text-emerald-100/80 font-mono leading-snug">
+                          {aiDifficulty === "EASY"
+                            ? "🟢 Easy — bot throws random numbers. Great for warming up."
+                            : aiDifficulty === "MEDIUM"
+                            ? "🟡 Medium — bot dodges your last number about half the time."
+                            : "🔴 Hard — bot hunts your most-used number to bowl you out."}
+                        </p>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 z-10 pt-4 border-t border-white/15 mt-5 font-sans">
@@ -2619,6 +2671,38 @@ export default function App() {
                         />
                       ))}
                     </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100">
+                    <label className="text-[9px] font-mono text-red-400 uppercase font-black">Danger zone</label>
+                    {!confirmDelete ? (
+                      <button
+                        onClick={() => setConfirmDelete(true)}
+                        className="mt-2 w-full py-2.5 rounded-xl bg-white hover:bg-red-50 text-red-600 font-black text-xs border border-red-200 transition cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" /> Delete my account & data
+                      </button>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        <p className="text-[10px] text-slate-500 font-medium text-center leading-snug">
+                          This permanently erases your stats, rating and sign-in. It can't be undone.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setConfirmDelete(false)}
+                            className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs cursor-pointer active:scale-95"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleDeleteAccount}
+                            className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-xs cursor-pointer active:scale-95"
+                          >
+                            Confirm delete
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
