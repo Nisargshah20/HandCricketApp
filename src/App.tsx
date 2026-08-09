@@ -23,6 +23,7 @@ import {
   itemPrice,
 } from "./services/cosmetics";
 import { ACHIEVEMENTS, evaluateAchievements } from "./services/achievements";
+import { speak as ttsSpeak, setTtsMuted } from "./services/tts";
 import confetti from "canvas-confetti";
 import {
   Trophy,
@@ -410,19 +411,31 @@ function computeAiMove(
   return aiMove;
 }
 
-// Spoken commentary via the device's built-in text-to-speech.
+// Spoken commentary via the native TTS plugin (works inside the Android WebView).
 function speakCommentary(text: string) {
-  try {
-    if (SoundEffects.isMuted) return;
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/["🏏🎙️]/g, "").trim());
-    u.rate = 1.08;
-    u.pitch = 1.05;
-    u.volume = 0.9;
-    synth.speak(u);
-  } catch (e) {}
+  ttsSpeak(text);
+}
+
+// Varied cricket-style phrases for a scoring shot (no raw hand numbers).
+function describeRuns(runs: number): string {
+  const six = [
+    "MAXIMUM! That's sailed high into the stands for a huge SIX!",
+    "BOOM! Launched clean over the ropes — SIX runs!",
+    "What a strike! That's gone all the way, SIX!",
+  ];
+  const four = [
+    "FOUR! Cracked away to the boundary rope!",
+    "Beautiful timing — races away for FOUR!",
+    "Shot! Threads the gap for FOUR runs!",
+  ];
+  const small = [
+    `Worked away nicely for ${runs}.`,
+    `Good running between the wickets, ${runs} more.`,
+    `Tucked into the gap for ${runs}.`,
+    `Solid stroke, ${runs} added to the total.`,
+  ];
+  const bank = runs === 6 ? six : runs === 4 ? four : small;
+  return bank[Math.floor(Math.random() * bank.length)];
 }
 
 interface ChatMessage {
@@ -1147,11 +1160,7 @@ export default function App() {
     const nowMuted = !isAudioMuted;
     SoundEffects.isMuted = nowMuted;
     setIsAudioMuted(nowMuted);
-    if (nowMuted) {
-      try {
-        window.speechSynthesis?.cancel();
-      } catch (e) {}
-    }
+    setTtsMuted(nowMuted);
   };
 
   // Generate Live Commentary for AI Match
@@ -1542,7 +1551,7 @@ export default function App() {
           const nextScore = aiScore + runs;
           setAiScore(nextScore);
 
-          const runMsg = `Good shot! Shot for ${runs} runs. Batsman choose ${move}, bowler choose ${aiPlay}.`;
+          const runMsg = describeRuns(runs);
           setLatestCommentary(runMsg);
 
           // Overs validation limit
@@ -1644,7 +1653,7 @@ export default function App() {
 
             if (draw) {
               setAiWinnerResult("TIE");
-              setLatestCommentary("TIE match! Total epic drama. Scores are hand-locked.");
+              setLatestCommentary("TIED! Scores are level — what a nail-biting finish!");
             } else if (userWon) {
               setAiWinnerResult("PLAYER_WIN");
               setLatestCommentary(`VICTORY! You restricted the AI to ${nextScore} runs over ${maxOversSelected} overs. Outstanding!`);
@@ -1663,7 +1672,7 @@ export default function App() {
           } else {
             // Continuation of play
             const remainingRuns = targetValue - nextScore;
-            const liveMsg = `AI batsman plays ${runs} runs. Needs ${remainingRuns} runs from ${maxTotalBalls - totalBalls} balls to win.`;
+            const liveMsg = `${describeRuns(runs)} AI needs ${remainingRuns} from ${maxTotalBalls - totalBalls} balls.`;
             setLatestCommentary(liveMsg);
 
             setAiMatchHistory((prev) => [
