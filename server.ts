@@ -299,7 +299,7 @@ app.get("/privacy", (_req, res) => {
 });
 
 // Ensure a display name is unique across all other players. Collisions get a
-// numeric suffix ("Vrushali Shah 2"); as a last resort a userId-based tag.
+// random 3-digit tag ("Vrushali Shah742"); a userId tag is the last resort.
 function makeUniqueUsername(desired: string, userId: string): string {
   const clean =
     (desired || "").trim().replace(/\s+/g, " ").slice(0, 20) ||
@@ -307,12 +307,12 @@ function makeUniqueUsername(desired: string, userId: string): string {
   const taken = (name: string) =>
     leaderboard.some((p) => p.userId !== userId && p.username.toLowerCase() === name.toLowerCase());
   if (!taken(clean)) return clean;
-  for (let i = 2; i <= 999; i++) {
-    const suffix = ` ${i}`;
-    const candidate = clean.slice(0, 20 - suffix.length) + suffix;
+  const base = clean.slice(0, 17); // leave room for the 3-digit tag
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const candidate = base + (100 + Math.floor(Math.random() * 900));
     if (!taken(candidate)) return candidate;
   }
-  return clean.slice(0, 15) + "#" + userId.slice(-4);
+  return base + userId.slice(-4);
 }
 
 // Helper to update player stats on match completion
