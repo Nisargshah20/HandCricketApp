@@ -47,14 +47,16 @@ interface LeaderboardEntry {
 
 let leaderboard: LeaderboardEntry[] = [];
 
-// Starting board so a fresh install/database looks populated.
-const SEED_LEADERBOARD: LeaderboardEntry[] = [
-  { userId: "ai_virat", username: "Master_Blaster", wins: 45, matchesPlayed: 50, runsScored: 1250, wicketsTaken: 38, avatarColor: "from-sky-400 to-blue-500", rating: 1450 },
-  { userId: "ai_sachin", username: "Cricket_King", wins: 38, matchesPlayed: 48, runsScored: 1020, wicketsTaken: 25, avatarColor: "from-amber-400 to-orange-500", rating: 1320 },
-  { userId: "ai_msd", username: "MSD_Finisher", wins: 34, matchesPlayed: 40, runsScored: 910, wicketsTaken: 12, avatarColor: "from-emerald-400 to-teal-500", rating: 1280 },
-  { userId: "ai_warne", username: "Spin_Wizard", wins: 29, matchesPlayed: 42, runsScored: 450, wicketsTaken: 48, avatarColor: "from-purple-400 to-indigo-500", rating: 1190 },
-  { userId: "ai_gilly", username: "Gilly_Glove", wins: 22, matchesPlayed: 35, runsScored: 680, wicketsTaken: 5, avatarColor: "from-pink-400 to-rose-500", rating: 1090 },
-];
+// Legacy demo/bot ids that should never appear on the public board.
+const SEED_PREFIX = "ai_";
+const isRealPlayer = (e: LeaderboardEntry) => !e.userId.startsWith(SEED_PREFIX);
+
+// Standard ELO update. K=32. Floors at 100 so a rating never underflows.
+function computeElo(playerRating: number, opponentRating: number, won: boolean, k = 32): number {
+  const expected = 1 / (1 + Math.pow(10, (opponentRating - playerRating) / 400));
+  const next = Math.round(playerRating + k * ((won ? 1 : 0) - expected));
+  return Math.max(100, next);
+}
 
 // Persistence: Postgres (Neon/Supabase) when DATABASE_URL is set, else a local JSON file.
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -104,12 +106,7 @@ async function initLeaderboard() {
       )`
     );
     const { rows } = await pgPool.query("SELECT * FROM leaderboard");
-    if (rows.length === 0) {
-      for (const e of SEED_LEADERBOARD) await upsertPlayer(e);
-      leaderboard = [...SEED_LEADERBOARD];
-    } else {
-      leaderboard = rows.map(rowToEntry);
-    }
+    leaderboard = rows.map(rowToEntry).filter(isRealPlayer);
     console.log(`Leaderboard loaded from Postgres (${leaderboard.length} players).`);
     return;
   }
@@ -117,14 +114,14 @@ async function initLeaderboard() {
   // File fallback (local dev / no database configured)
   try {
     if (fs.existsSync(LEADERBOARD_FILE)) {
-      leaderboard = JSON.parse(fs.readFileSync(LEADERBOARD_FILE, "utf-8"));
+      leaderboard = (JSON.parse(fs.readFileSync(LEADERBOARD_FILE, "utf-8")) as LeaderboardEntry[]).filter(isRealPlayer);
     } else {
-      leaderboard = [...SEED_LEADERBOARD];
+      leaderboard = [];
       fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2));
     }
   } catch (error) {
     console.error("Failed to load leaderboard:", error);
-    leaderboard = [...SEED_LEADERBOARD];
+    leaderboard = [];
   }
 }
 
@@ -152,12 +149,20 @@ app.get("/api/leaderboard", (req, res) => {
 });
 
 app.post("/api/leaderboard", (req, res) => {
-  const { userId, username, won, runs, wickets, avatarColor } = req.body;
+  const { userId, username, won, runs, wickets, avatarColor, opponentRating } = req.body;
   if (!userId) {
     return res.status(400).json({ error: "userId is required" });
   }
-  updatePlayerStats(userId, username, !!won, Number(runs || 0), Number(wickets || 0), avatarColor || "from-sky-400 to-indigo-500");
-  res.json({ status: "success" });
+  const updated = updatePlayerStats(
+    userId,
+    username,
+    !!won,
+    Number(runs || 0),
+    Number(wickets || 0),
+    avatarColor || "from-sky-400 to-indigo-500",
+    Number(opponentRating || 1000)
+  );
+  res.json({ status: "success", rating: updated.rating, wins: updated.wins, matchesPlayed: updated.matchesPlayed });
 });
 
 // Google Sign-In: verify the ID token and create/load a persistent account keyed by Google's stable user id.
@@ -217,8 +222,9 @@ function updatePlayerStats(
   won: boolean,
   runs: number,
   wickets: number,
-  avatarColor: string
-) {
+  avatarColor: string,
+  opponentRating: number = 1000
+): LeaderboardEntry {
   let player = leaderboard.find((p) => p.userId === userId);
   if (!player) {
     player = {
@@ -240,14 +246,11 @@ function updatePlayerStats(
   if (username) player.username = username;
   if (avatarColor) player.avatarColor = avatarColor;
 
-  if (won) {
-    player.wins += 1;
-    player.rating += 25; // Gain rating points
-  } else {
-    player.rating = Math.max(800, player.rating - 15); // Lose rating points
-  }
+  if (won) player.wins += 1;
+  player.rating = computeElo(player.rating, opponentRating, won);
 
   saveLeaderboard(player);
+  return player;
 }
 
 // Generate Cricket Commentary Endpoint (100% cost-free, running algorithmic local-only humor)
@@ -895,8 +898,10 @@ async function resolveBall(match: MatchState) {
       const winner = batsPlayer;
       const loser = bowlPlayer;
 
-      updatePlayerStats(winner.id, winner.username, true, match.score, 0, winner.avatarColor);
-      updatePlayerStats(loser.id, loser.username, false, match.firstInningsRuns, 1, loser.avatarColor);
+      const winnerRating = leaderboard.find((x) => x.userId === winner.id)?.rating ?? 1000;
+      const loserRating = leaderboard.find((x) => x.userId === loser.id)?.rating ?? 1000;
+      updatePlayerStats(winner.id, winner.username, true, match.score, 0, winner.avatarColor, loserRating);
+      updatePlayerStats(loser.id, loser.username, false, match.firstInningsRuns, 1, loser.avatarColor, winnerRating);
 
       broadcastToMatch(match, {
         type: "MATCH_FINISHED",
@@ -919,8 +924,10 @@ async function resolveBall(match: MatchState) {
       }
 
       if (isDraw) {
-        updatePlayerStats(p1.id, p1.username, false, p1.score, 0, p1.avatarColor);
-        updatePlayerStats(p2.id, p2.username, false, p2.score, 0, p2.avatarColor);
+        const rd1 = leaderboard.find((x) => x.userId === p1.id)?.rating ?? 1000;
+        const rd2 = leaderboard.find((x) => x.userId === p2.id)?.rating ?? 1000;
+        updatePlayerStats(p1.id, p1.username, false, p1.score, 0, p1.avatarColor, rd2);
+        updatePlayerStats(p2.id, p2.username, false, p2.score, 0, p2.avatarColor, rd1);
         broadcastToMatch(match, {
           type: "MATCH_FINISHED",
           payload: {
@@ -931,8 +938,10 @@ async function resolveBall(match: MatchState) {
           },
         });
       } else {
-        updatePlayerStats(winner.id, winner.username, true, match.firstInningsRuns, 1, winner.avatarColor);
-        updatePlayerStats(loser.id, loser.username, false, match.score, 0, loser.avatarColor);
+        const wRating = leaderboard.find((x) => x.userId === winner.id)?.rating ?? 1000;
+        const lRating = leaderboard.find((x) => x.userId === loser.id)?.rating ?? 1000;
+        updatePlayerStats(winner.id, winner.username, true, match.firstInningsRuns, 1, winner.avatarColor, lRating);
+        updatePlayerStats(loser.id, loser.username, false, match.score, 0, loser.avatarColor, wRating);
 
         broadcastToMatch(match, {
           type: "MATCH_FINISHED",

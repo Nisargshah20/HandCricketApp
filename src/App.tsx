@@ -13,6 +13,7 @@ import AdMobSimulator from "./components/AdMobSimulator";
 import { AdMobInstance } from "./services/admob";
 import { apiUrl, wsUrl } from "./services/api";
 import { googleConfigured, initAuth, googleSignIn, googleSignOut } from "./services/auth";
+import { App as CapacitorApp } from "@capacitor/app";
 import confetti from "canvas-confetti";
 import {
   Trophy,
@@ -36,6 +37,9 @@ import {
   ShieldAlert,
   Crown,
   Share2,
+  User,
+  LogIn,
+  Edit3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -215,6 +219,10 @@ export default function App() {
     const val = safeLocalStorage.getItem("hc_highscore");
     return val ? parseInt(val, 10) : 48;
   });
+  const [userRating, setUserRating] = useState<number>(() => {
+    const val = safeLocalStorage.getItem("hc_rating");
+    return val ? parseInt(val, 10) : 1000;
+  });
   const [dailyCollectCount, setDailyCollectCount] = useState<number>(() => {
     const val = safeLocalStorage.getItem("hc_daily_collect");
     return val ? parseInt(val, 10) : 0;
@@ -233,6 +241,9 @@ export default function App() {
   useEffect(() => {
     safeLocalStorage.setItem("hc_highscore", highScore.toString());
   }, [highScore]);
+  useEffect(() => {
+    safeLocalStorage.setItem("hc_rating", userRating.toString());
+  }, [userRating]);
   useEffect(() => {
     safeLocalStorage.setItem("hc_daily_collect", dailyCollectCount.toString());
   }, [dailyCollectCount]);
@@ -320,6 +331,7 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const pendingWsRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const modeRef = useRef<GameMode>(mode);
 
   useEffect(() => {
     safeLocalStorage.setItem("hc_username", username);
@@ -347,6 +359,32 @@ export default function App() {
     initAuth().catch(() => {});
   }, []);
 
+  // Keep a ref of the current screen so the hardware back handler is never stale.
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  // Android hardware back button: leave match / go to lobby / exit at root.
+  useEffect(() => {
+    let sub: { remove: () => void } | undefined;
+    CapacitorApp.addListener("backButton", () => {
+      const current = modeRef.current;
+      if (current === GameMode.MULTIPLAYER_MATCH) {
+        handleLeaveMultiplayerGame();
+      } else if (current !== GameMode.MENU) {
+        SoundEffects.playClick();
+        setMode(GameMode.MENU);
+      } else {
+        CapacitorApp.exitApp();
+      }
+    })
+      .then((s) => {
+        sub = s;
+      })
+      .catch(() => {});
+    return () => sub?.remove();
+  }, []);
+
   const handleGoogleSignIn = async () => {
     try {
       const { idToken } = await googleSignIn();
@@ -361,6 +399,7 @@ export default function App() {
       safeLocalStorage.setItem("hc_userid", data.userId);
       if (data.username) setUsername(data.username);
       if (data.avatarColor) setAvatarColor(data.avatarColor);
+      if (typeof data.rating === "number") setUserRating(data.rating);
       safeLocalStorage.setItem("hc_google_signed_in", "1");
       setIsSignedIn(true);
       triggerToast("Signed in! Your progress is now saved to your Google account.", "success");
@@ -929,7 +968,7 @@ export default function App() {
           // Log to history
           setAiMatchHistory((prev) => [
             ...prev,
-            { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs: 0, isOut: true, commText: inningsMsg },
+            { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs: 0, isOut: true, commText: inningsMsg, innings: aiInnings, userWasBatting: isUserBatting },
           ]);
         } else {
           SoundEffects.playBallRun(runs);
@@ -954,7 +993,7 @@ export default function App() {
 
           setAiMatchHistory((prev) => [
             ...prev,
-            { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs, isOut: false, commText: runMsg },
+            { ball: totalBalls, batsmanMove: move, bowlerMove: aiPlay, runs, isOut: false, commText: runMsg, innings: aiInnings, userWasBatting: isUserBatting },
           ]);
         }
       } else {
@@ -987,7 +1026,7 @@ export default function App() {
 
           setAiMatchHistory((prev) => [
             ...prev,
-            { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs: 0, isOut: true, commText: victoryMsg },
+            { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs: 0, isOut: true, commText: victoryMsg, innings: aiInnings, userWasBatting: isUserBatting },
           ]);
         } else {
           SoundEffects.playBallRun(runs);
@@ -1005,7 +1044,7 @@ export default function App() {
 
             setAiMatchHistory((prev) => [
               ...prev,
-              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: lossMsg },
+              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: lossMsg, innings: aiInnings, userWasBatting: isUserBatting },
             ]);
           } else if (totalBalls >= maxTotalBalls) {
             // Defended overs limit
@@ -1029,7 +1068,7 @@ export default function App() {
 
             setAiMatchHistory((prev) => [
               ...prev,
-              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: "Innings over." },
+              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: "Innings over.", innings: aiInnings, userWasBatting: isUserBatting },
             ]);
           } else {
             // Continuation of play
@@ -1039,7 +1078,7 @@ export default function App() {
 
             setAiMatchHistory((prev) => [
               ...prev,
-              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: liveMsg },
+              { ball: totalBalls, batsmanMove: aiPlay, bowlerMove: move, runs, isOut: false, commText: liveMsg, innings: aiInnings, userWasBatting: isUserBatting },
             ]);
           }
         }
@@ -1070,7 +1109,7 @@ export default function App() {
     }
 
     try {
-      await fetch(apiUrl("/api/leaderboard"), {
+      const scoreRes = await fetch(apiUrl("/api/leaderboard"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1080,8 +1119,13 @@ export default function App() {
           runs,
           wickets,
           avatarColor,
+          opponentRating: aiDifficulty === "HARD" ? 1300 : aiDifficulty === "MEDIUM" ? 1100 : 900,
         }),
       });
+      if (scoreRes.ok) {
+        const scoreData = await scoreRes.json();
+        if (typeof scoreData.rating === "number") setUserRating(scoreData.rating);
+      }
       // Trigger a silent REST payload save on backend
       const res = await fetch(apiUrl("/api/leaderboard"));
       if (res.ok) {
@@ -1272,7 +1316,7 @@ export default function App() {
 
             <div className="bg-emerald-950/40 border border-emerald-500/20 rounded-2xl px-3 py-1.5 hidden sm:flex items-center gap-2 text-xs text-white">
               <Trophy className="w-3.5 h-3.5 text-yellow-300" />
-              <span className="font-mono font-extrabold text-white">{userWins * 25 + 1000}</span>
+              <span className="font-mono font-extrabold text-white">{userRating}</span>
               <span className="text-[9px] text-emerald-100 font-mono uppercase">ELO</span>
             </div>
 
@@ -1322,18 +1366,24 @@ export default function App() {
                 {/* 1. TOP PLAYER PASSPORT CARD */}
                 <div className="bg-white border border-slate-150 rounded-3xl p-5 shadow-xl mb-4 space-y-4">
                   <div className="flex items-center justify-between text-left">
-                    <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        SoundEffects.playClick();
+                        setMode(GameMode.PROFILE);
+                      }}
+                      className="flex items-center gap-3 text-left group cursor-pointer"
+                    >
                       <div className={`w-12 h-12 rounded-full bg-gradient-to-tr ${avatarColor} flex-shrink-0 border-2 border-slate-105 shadow-md flex items-center justify-center text-lg`}>
                         🏏
                       </div>
                       <div>
-                        <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block font-sans">Active Player Licence</span>
+                        <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block font-sans">Tap to edit profile</span>
                         <h3 className="text-md font-display font-black text-slate-800 leading-none flex items-center gap-1.5 mt-0.5">
                           {username}
-                          <span className="text-[7.5px] font-mono bg-yellow-405 text-emerald-950 px-1 rounded uppercase tracking-wider font-extrabold">PRO</span>
+                          <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-emerald-600 transition" />
                         </h3>
                       </div>
-                    </div>
+                    </button>
                     <div className="text-right">
                       <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400 font-bold block font-sans">Coins Balance</span>
                       <span className="text-sm font-mono font-black text-emerald-800 flex items-center gap-1 justify-end">
@@ -1345,7 +1395,7 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-150 text-center font-sans">
                     <div>
                       <span className="text-[8px] font-mono font-bold text-slate-400 block uppercase">ELO Rating</span>
-                      <span className="text-xs font-mono font-black text-amber-600 block">{userWins * 25 + 1000} ELO</span>
+                      <span className="text-xs font-mono font-black text-amber-600 block">{userRating} ELO</span>
                     </div>
                     <div>
                       <span className="text-[8px] font-mono font-bold text-slate-400 block uppercase">Total Plays</span>
@@ -1652,68 +1702,17 @@ export default function App() {
                       className="bg-white border border-slate-150 rounded-3xl p-5 flex flex-col justify-between shadow-xl min-h-[300px]"
                     >
                       <div className="space-y-4 text-left font-sans">
-                        <span className="text-[10px] font-mono font-bold text-emerald-700 uppercase tracking-widest block">Elite Profile Customization</span>
+                        <span className="text-[10px] font-mono font-bold text-emerald-700 uppercase tracking-widest block">Daily Rewards & Boosters</span>
 
-                        {googleConfigured && (
-                          <div className="space-y-2">
-                            <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Account</label>
-                            {isSignedIn ? (
-                              <button
-                                onClick={() => {
-                                  SoundEffects.playClick();
-                                  handleGoogleSignOut();
-                                }}
-                                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 transition-colors cursor-pointer"
-                              >
-                                Sign out ({username})
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  SoundEffects.playClick();
-                                  handleGoogleSignIn();
-                                }}
-                                className="w-full py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-black text-xs border border-slate-300 transition-colors cursor-pointer flex items-center justify-center gap-2"
-                              >
-                                <span className="text-sky-600">G</span> Sign in with Google to save progress
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Edit Player Alias</label>
-                          <input
-                            type="text"
-                            maxLength={18}
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-black text-slate-800 focus:outline-none focus:border-emerald-600 transition"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Select Avatar Hue Theme</label>
-                          <div className="flex gap-2">
-                            {[
-                              "from-sky-400 to-indigo-600",
-                              "from-emerald-400 to-teal-600",
-                              "from-amber-400 to-orange-600",
-                              "from-fuchsia-450 to-pink-600",
-                            ].map((gradient) => (
-                              <button
-                                key={gradient}
-                                onClick={() => {
-                                  SoundEffects.playClick();
-                                  setAvatarColor(gradient);
-                                }}
-                                className={`w-7 h-7 rounded-full bg-gradient-to-tr ${gradient} border cursor-pointer ${
-                                  avatarColor === gradient ? "border-slate-800 ring-2 ring-emerald-600" : "border-transparent"
-                                } transition-transform active:scale-95`}
-                              />
-                            ))}
-                          </div>
-                        </div>
+                        <button
+                          onClick={() => {
+                            SoundEffects.playClick();
+                            setMode(GameMode.PROFILE);
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-black text-xs border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <User className="w-3.5 h-3.5" /> Open Profile & Account
+                        </button>
 
                         <div className="pt-2">
                           {dailyCollectCount > 0 ? (
@@ -2117,7 +2116,7 @@ export default function App() {
                               className="flex items-center justify-between p-2 bg-slate-50 rounded-xl border border-slate-100 gap-2.5"
                             >
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono text-slate-400 font-bold">B{hist.ball}</span>
+                                <span className="text-[10px] font-mono text-slate-400 font-bold">I{hist.innings ?? 1}·B{hist.ball}</span>
                                 {hist.isOut ? (
                                   <span className="bg-red-100 text-red-700 border border-red-200 text-[9px] font-extrabold px-1.5 py-0.5 rounded">
                                     OUT
@@ -2129,7 +2128,7 @@ export default function App() {
                                 )}
                               </div>
                               <div className="text-[10px] font-mono text-slate-500 font-semibold">
-                                {isUserBatting ? "You" : "AI"} ({hist.batsmanMove}) vs Opp ({hist.bowlerMove})
+                                {(hist.userWasBatting ?? isUserBatting) ? "You" : "AI"} ({hist.batsmanMove}) vs {(hist.userWasBatting ?? isUserBatting) ? "AI" : "You"} ({hist.bowlerMove})
                               </div>
                             </div>
                           ))}
@@ -2467,9 +2466,9 @@ export default function App() {
                             player.userId === userId ? "ring-2 ring-yellow-400 border-yellow-405 shadow-md bg-yellow-50/10" : "shadow-xs"
                           }`}
                         >
-                          <div className="flex items-center gap-3.5">
+                          <div className="flex items-center gap-3.5 min-w-0 flex-1">
                             <span
-                              className={`w-7 h-7 rounded-lg border flex items-center justify-center font-mono font-black text-xs shadow-xs ${badgeBg}`}
+                              className={`w-7 h-7 rounded-lg border flex items-center justify-center font-mono font-black text-xs shadow-xs flex-shrink-0 ${badgeBg}`}
                             >
                               {idx + 1}
                             </span>
@@ -2477,27 +2476,28 @@ export default function App() {
                             {/* Avatar representation */}
                             <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${player.avatarColor || "from-sky-400 to-indigo-500"} flex-shrink-0 shadow-xs`} />
 
-                            <div>
+                            <div className="min-w-0">
                               <h4 className="text-sm font-black text-slate-800 flex items-center gap-1.5 leading-tight">
-                                {player.username}
+                                <span className="truncate">{player.username}</span>
                                 {player.userId === userId && (
-                                  <span className="text-[8px] bg-yellow-500 font-mono text-emerald-950 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
+                                  <span className="text-[8px] bg-yellow-500 font-mono text-emerald-950 px-1.5 py-0.5 rounded font-black uppercase tracking-wider flex-shrink-0">
                                     YOU
                                   </span>
                                 )}
                               </h4>
-                              <p className="text-[10px] text-slate-450 font-mono weight-bold">
-                                Match Wins: {player.wins} / Plays: {player.matchesPlayed}
+                              <p className="text-[10px] text-slate-450 font-mono weight-bold truncate">
+                                {player.wins}W · {player.matchesPlayed} played
                               </p>
                             </div>
                           </div>
 
-                          <div className="text-right">
-                            <span className="text-xs font-black font-mono text-emerald-800 block">
-                              {player.rating || 1000} ELO
+                          <div className="text-right flex-shrink-0">
+                            <span className="text-sm font-black font-mono text-emerald-800 block leading-none">
+                              {player.rating || 1000}
+                              <span className="text-[8px] text-slate-400 ml-0.5">ELO</span>
                             </span>
-                            <span className="text-[9px] text-slate-450 font-mono block font-semibold">
-                              Runs: {player.runsScored} • Wickets: {player.wicketsTaken}
+                            <span className="text-[9px] text-slate-450 font-mono block font-semibold whitespace-nowrap mt-1">
+                              {player.runsScored} R · {player.wicketsTaken} W
                             </span>
                           </div>
                         </div>
@@ -2509,6 +2509,125 @@ export default function App() {
                 <div className="text-center pt-2">
                   <button
                     onClick={() => setMode(GameMode.MENU)}
+                    className="px-6 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition cursor-pointer active:scale-95"
+                  >
+                    Return to Lobby
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* PROFILE SCREEN */}
+            {mode === GameMode.PROFILE && (
+              <motion.div
+                key="profile-screen"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                className="max-w-md mx-auto w-full space-y-4"
+              >
+                <div className="bg-white border border-slate-150 rounded-3xl p-6 shadow-xl space-y-5 text-left">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-16 h-16 rounded-full bg-gradient-to-tr ${avatarColor} border-2 border-slate-100 shadow-md flex items-center justify-center text-2xl flex-shrink-0`}>
+                      🏏
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block">Player Profile</span>
+                      <h3 className="text-lg font-display font-black text-slate-800 truncate">{username}</h3>
+                      <span className="text-[11px] font-mono text-emerald-700 font-bold">
+                        {userRating} ELO{isSignedIn ? " • ✓ Google" : ""}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-150 text-center">
+                    <div>
+                      <span className="text-[8px] font-mono text-slate-400 block uppercase">Wins</span>
+                      <span className="text-sm font-black text-emerald-700">{userWins}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono text-slate-400 block uppercase">Played</span>
+                      <span className="text-sm font-black text-slate-800">{userMatches}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono text-slate-400 block uppercase">Best</span>
+                      <span className="text-sm font-black text-slate-800">{highScore}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono text-slate-400 block uppercase">Coins</span>
+                      <span className="text-sm font-black text-amber-600">{coins}</span>
+                    </div>
+                  </div>
+
+                  {googleConfigured && (
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Account</label>
+                      {isSignedIn ? (
+                        <button
+                          onClick={() => {
+                            SoundEffects.playClick();
+                            handleGoogleSignOut();
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 transition cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <LogOut className="w-3.5 h-3.5" /> Sign out
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            SoundEffects.playClick();
+                            handleGoogleSignIn();
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-black text-xs border border-slate-300 transition cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <LogIn className="w-3.5 h-3.5 text-sky-600" /> Sign in with Google to save progress
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Player name</label>
+                    <input
+                      type="text"
+                      maxLength={18}
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-black text-slate-800 focus:outline-none focus:border-emerald-600 transition"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-mono text-slate-400 uppercase font-black">Avatar colour</label>
+                    <div className="flex gap-2">
+                      {[
+                        "from-sky-400 to-indigo-600",
+                        "from-emerald-400 to-teal-600",
+                        "from-amber-400 to-orange-600",
+                        "from-fuchsia-450 to-pink-600",
+                        "from-red-500 to-orange-600",
+                      ].map((gradient) => (
+                        <button
+                          key={gradient}
+                          onClick={() => {
+                            SoundEffects.playClick();
+                            setAvatarColor(gradient);
+                          }}
+                          className={`w-8 h-8 rounded-full bg-gradient-to-tr ${gradient} border cursor-pointer ${
+                            avatarColor === gradient ? "border-slate-800 ring-2 ring-emerald-600" : "border-transparent"
+                          } transition active:scale-95`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-center">
+                  <button
+                    onClick={() => {
+                      SoundEffects.playClick();
+                      setMode(GameMode.MENU);
+                    }}
                     className="px-6 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition cursor-pointer active:scale-95"
                   >
                     Return to Lobby

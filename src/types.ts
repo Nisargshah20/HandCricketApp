@@ -6,6 +6,7 @@ export enum GameMode {
   LEADERBOARD = "LEADERBOARD",
   REVENUE_INFO = "REVENUE_INFO",
   TOURNAMENT_LOBBY = "TOURNAMENT_LOBBY",
+  PROFILE = "PROFILE",
 }
 
 export interface PlayerStats {
@@ -26,6 +27,8 @@ export interface MatchHistoryItem {
   runs: number;
   isOut: boolean;
   commText: string;
+  innings?: number;
+  userWasBatting?: boolean;
 }
 
 export interface ClientMatchState {
