@@ -117,6 +117,12 @@ class AdMobService {
     }
 
     // Web preview or fallback
+    if (Capacitor.isNativePlatform()) {
+      // On a real device, never overlay the web ad simulator (causes a blank
+      // screen); just continue as if the ad closed.
+      onAdClosed();
+      return;
+    }
     this.triggerSimulatedEvent("INTERSTITIAL", "Google AdMob Interstitial", onAdClosed);
   }
 
@@ -196,6 +202,13 @@ class AdMobService {
     }
 
     // Web preview or fallback
+    if (Capacitor.isNativePlatform()) {
+      // On a real device, don't overlay the web simulator. Grant the reward so
+      // the button still works, then continue.
+      onRewardEarned(150);
+      onAdClosed();
+      return;
+    }
     this.triggerSimulatedEvent("REWARDED", "Google AdMob Rewarded Video", () => {
       onRewardEarned(150);
       onAdClosed();

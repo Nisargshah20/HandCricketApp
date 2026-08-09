@@ -59,7 +59,7 @@ import { motion, AnimatePresence } from "motion/react";
 // Web Audio API Retro Synthesizer to guarantee zero-dependency sound effects
 class SoundEffects {
   private static ctx: AudioContext | null = null;
-  public static isMuted = false;
+  public static isMuted = true;
 
   private static initCtx() {
     if (!this.ctx) {
@@ -494,7 +494,7 @@ export default function App() {
   });
   const [isSignedIn, setIsSignedIn] = useState<boolean>(() => safeLocalStorage.getItem("hc_google_signed_in") === "1");
   const [avatarColor, setAvatarColor] = useState<string>("from-sky-450 to-indigo-600");
-  const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [isAudioMuted, setIsAudioMuted] = useState(true);
 
   // Persistent user metrics
   const [coins, setCoins] = useState<number>(() => {
@@ -845,6 +845,7 @@ export default function App() {
     fetchLeaderboard();
     AdMobInstance.initialize();
     initAuth().catch(() => {});
+    setTtsMuted(true); // start muted; player can unmute from the header
   }, []);
 
   // Keep a ref of the current screen so the hardware back handler is never stale.
