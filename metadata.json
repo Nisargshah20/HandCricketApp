@@ -1,0 +1,6 @@
+{
+  "name": "Hand Cricket Multiplayer",
+  "description": "An interactive, real-time multiplayer Hand Cricket game featuring server-authoritative matches, smart AI, global leaderboards, live commentators, and custom monetization strategies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hand Cricket Multiplayer</string>
+    <string name="title_activity_main">Hand Cricket Multiplayer</string>
+    <string name="package_name">com.nisarg.handcricket</string>
+    <string name="custom_url_scheme">com.nisarg.handcricket</string>
+</resources>

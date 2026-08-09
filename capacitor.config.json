@@ -1,0 +1,13 @@
+{
+  "appId": "com.nisarg.handcricket",
+  "appName": "Hand Cricket Multiplayer",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "AdMob": {
+      "initializeForTesting": true
+    }
+  }
+}

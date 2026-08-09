@@ -1,0 +1,20 @@
+# Render Blueprint for the Hand Cricket backend (server.ts).
+# Deploy: push this repo to GitHub, then on render.com -> New -> Blueprint -> pick the repo.
+#
+# NOTE: NODE_ENV is set only in startCommand (not as an env var) so that `npm install`
+# during build still installs devDependencies (vite/esbuild) needed to build.
+services:
+  - type: web
+    name: hand-cricket-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: NODE_ENV=production node dist/server.cjs
+    healthCheckPath: /api/leaderboard
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      # Paste your Neon/Supabase Postgres connection string in the Render dashboard.
+      # If unset, the leaderboard falls back to an ephemeral JSON file.
+      - key: DATABASE_URL
+        sync: false
