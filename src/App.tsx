@@ -404,9 +404,10 @@ export default function App() {
       setIsSignedIn(true);
       triggerToast("Signed in! Your progress is now saved to your Google account.", "success");
       fetchLeaderboard();
-    } catch (e) {
+    } catch (e: any) {
       console.error("Google sign-in failed:", e);
-      triggerToast("Google sign-in failed. Please try again.", "error");
+      const msg = (e?.message || e?.errorMessage || e?.code || String(e) || "unknown").toString();
+      triggerToast(`Sign-in failed: ${msg}`.slice(0, 180), "error");
     }
   };
 
@@ -1298,12 +1299,12 @@ export default function App() {
       <AnimatePresence>
         {toast && (
           <motion.div
-            initial={{ opacity: 0, y: -20, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, x: "-50%" }}
-            exit={{ opacity: 0, scale: 0.95, x: "-50%", transition: { duration: 0.15 } }}
-            className="fixed top-5 left-1/2 -translate-x-1/2 z-[150] w-full max-w-sm px-4"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.15 } }}
+            className="fixed top-4 inset-x-0 z-[150] px-4 flex justify-center pointer-events-none"
           >
-            <div className={`p-4 rounded-2xl shadow-xl border flex items-start gap-3 backdrop-blur-md ${
+            <div className={`pointer-events-auto w-full max-w-sm p-4 rounded-2xl shadow-xl border flex items-start gap-3 backdrop-blur-md ${
               toast.type === "error"
                 ? "bg-red-50/95 border-red-200 text-red-900"
                 : toast.type === "success"
@@ -1313,12 +1314,12 @@ export default function App() {
               <div className="flex-shrink-0 text-base mt-0.5">
                 {toast.type === "error" ? "⚠️" : toast.type === "success" ? "✅" : "ℹ️"}
               </div>
-              <div className="flex-1 text-xs font-semibold leading-relaxed">
+              <div className="flex-1 min-w-0 text-xs font-semibold leading-relaxed break-words">
                 {toast.message}
               </div>
               <button
                 onClick={() => setToast(null)}
-                className="text-slate-400 hover:text-slate-700 text-xs font-mono font-bold p-0.5 ml-2 cursor-pointer transition"
+                className="flex-shrink-0 text-slate-400 hover:text-slate-700 text-xs font-mono font-bold p-0.5 ml-2 cursor-pointer transition"
               >
                 ✕
               </button>
@@ -1501,13 +1502,6 @@ export default function App() {
                             ))}
                           </div>
                         </div>
-                        <p className="text-[10px] text-emerald-100/80 font-mono leading-snug">
-                          {aiDifficulty === "EASY"
-                            ? "🟢 Easy — bot throws random numbers. Great for warming up."
-                            : aiDifficulty === "MEDIUM"
-                            ? "🟡 Medium — bot dodges your last number about half the time."
-                            : "🔴 Hard — bot hunts your most-used number to bowl you out."}
-                        </p>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 z-10 pt-4 border-t border-white/15 mt-5 font-sans">

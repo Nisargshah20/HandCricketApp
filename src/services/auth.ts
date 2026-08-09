@@ -23,7 +23,9 @@ export interface GoogleSignInResult {
 
 export async function googleSignIn(): Promise<GoogleSignInResult> {
   await initAuth();
-  const res = await SocialLogin.login({ provider: "google", options: { scopes: ["email", "profile"] } });
+  // Do NOT pass `scopes`: email/profile/openid are the plugin defaults, and passing
+  // scopes requires a modified MainActivity (else it rejects the login).
+  const res = await SocialLogin.login({ provider: "google", options: {} });
   const r: any = res.result;
   const idToken: string | undefined = r?.idToken;
   if (!idToken) throw new Error("Google did not return an ID token");
